@@ -432,6 +432,77 @@ canvas {
   display: none
 }
 
+/* --- HUD: health bar, damage vignette, death screen --- */
+
+#health-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  height: 14px;
+  z-index: 60;
+  background: rgba(10, 10, 18, .7);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  pointer-events: none
+}
+
+#health-bar.hidden {
+  display: none
+}
+
+#health-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #30c860, #6ee87a);
+  transition: width .18s ease-out
+}
+
+#health-fill.low {
+  background: linear-gradient(90deg, #c83030, #e86040)
+}
+
+#damage-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(200, 20, 20, .55) 100%);
+  transition: opacity .28s ease-out
+}
+
+#damage-vignette.hurt {
+  opacity: 1;
+  transition: opacity .06s ease-in
+}
+
+#death-screen {
+  z-index: 150
+}
+
+.death-content {
+  text-align: center
+}
+
+.death-title {
+  font-family: var(--fd);
+  font-size: clamp(30px, 8vw, 54px);
+  font-weight: 900;
+  letter-spacing: 8px;
+  color: var(--err);
+  margin-bottom: 10px;
+  text-shadow: 0 0 40px rgba(232, 48, 48, .4)
+}
+
+.death-sub {
+  color: var(--dim);
+  font-size: 13px;
+  letter-spacing: 2px
+}
+
 @media(max-width:600px) {
 
   .start-content,

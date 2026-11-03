@@ -16,7 +16,12 @@ export class UIManager {
     this.loadingEl = document.getElementById('loading-screen');
     this.mobileCtrl = document.getElementById('mobile-controls');
     this.crosshair = document.getElementById('crosshair');
+    this.healthBar = document.getElementById('health-bar');
+    this.healthFill = document.getElementById('health-fill');
+    this.vignette = document.getElementById('damage-vignette');
+    this.deathEl = document.getElementById('death-screen');
     this.prevSettings = null;
+    this._vignetteTimer = null;
 
     // Settings must load BEFORE the controls bind: binding a range input
     // fires its callback once with the DOM's uninitialized midpoint value,
@@ -185,7 +190,7 @@ export class UIManager {
 
   showLoading() { this.loadingEl.classList.remove('hidden'); }
   hideLoading() { this.loadingEl.classList.add('hidden'); }
-  showStart() { this.startEl.classList.remove('hidden'); this.crosshair.classList.add('hidden'); }
+  showStart() { this.startEl.classList.remove('hidden'); this.crosshair.classList.add('hidden'); this.hideHud(); }
   hideStart() { this.startEl.classList.add('hidden'); }
   showPause() {
     this.pauseEl.classList.remove('hidden');
@@ -204,6 +209,36 @@ export class UIManager {
   }
   showMobileControls() { this.mobileCtrl.classList.remove('hidden'); }
   toggleDebug() { this.debugEl.classList.toggle('hidden'); }
+
+  // --- HUD: health, damage feedback, death ---
+
+  showHud() { this.healthBar?.classList.remove('hidden'); }
+
+  hideHud() { this.healthBar?.classList.add('hidden'); }
+
+  updateHealth(pct) {
+    if (!this.healthFill) return;
+    const p = Math.max(0, Math.min(1, pct));
+    this.healthFill.style.width = (p * 100).toFixed(1) + '%';
+    this.healthFill.classList.toggle('low', p < 0.3);
+  }
+
+  flashDamage() {
+    if (!this.vignette) return;
+    this.vignette.classList.add('hurt');
+    clearTimeout(this._vignetteTimer);
+    this._vignetteTimer = setTimeout(() => this.vignette.classList.remove('hurt'), 320);
+  }
+
+  showDeath() {
+    this.deathEl?.classList.remove('hidden');
+    this.crosshair.classList.add('hidden');
+  }
+
+  hideDeath() {
+    this.deathEl?.classList.add('hidden');
+    this.crosshair.classList.remove('hidden');
+  }
 
   updateDebug(data) {
     if (!CFG.settings.showFps) {

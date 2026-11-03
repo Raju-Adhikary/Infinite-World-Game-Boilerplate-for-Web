@@ -24,6 +24,21 @@ export class PlayerController {
     this.body = null;
     this.avatar = null;
     this.spawnPos = new THREE.Vector3(0, CFG.player.spawnY, 0);
+
+    // Vitals
+    this.maxHealth = CFG.player.maxHealth;
+    this.health = this.maxHealth;
+    this.hurtCooldown = 0;
+    this.regenTimer = 0;
+    this.dead = false;
+    this.deadTimer = 0;
+    // Camera follow state: false until the rig has been seated on a pose, so
+    // spawns and respawns snap instead of sliding across the world
+    this._camSeated = false;
+    // UI hooks, assigned by Game: onHurt / onDeath / onRespawn
+    this.onHurt = null;
+    this.onDeath = null;
+    this.onRespawn = null;
   }
 
   _createAvatar() {
@@ -141,6 +156,23 @@ export class PlayerController {
   update(dt) {
     if (!this.body) return;
 
+    // Death flow: freeze the body, keep the overlay up, then wake up at spawn
+    if (this.dead) {
+      this.deadTimer -= dt;
+      if (this.deadTimer <= 0) this._respawn();
+      return this.getPos();
+    }
+
+    this.hurtCooldown = Math.max(0, this.hurtCooldown - dt);
+
+    // Slow regeneration once no damage has been taken for a while
+    if (this.health < this.maxHealth) {
+      this.regenTimer -= dt;
+      if (this.regenTimer <= 0) {
+        this.health = Math.min(this.maxHealth, this.health + CFG.player.regenRate * dt);
+      }
+    }
+
     const pos = this.physics.getBodyPos(this.body);
     const vel = this.body.linvel();
 
@@ -167,7 +199,10 @@ export class PlayerController {
     // horizontal movement slows down. The player can wade across shallows
     // and dive to the lakebed.
     const submerged = p.y < CFG.world.waterLevel - 0.2;
-    const spd = CFG.player.moveSpeed * (submerged ? 0.55 : 1);
+    const sprinting = !!this.input.actions.sprint && dir.lengthSq() > 0;
+    const spd = CFG.player.moveSpeed
+      * (submerged ? 0.55 : 1)
+      * (sprinting ? CFG.player.sprintMult : 1);
     if (submerged) {
       const targetVy = this.input.actions.jump ? CFG.player.swimUp : -0.8;
       const vy = vel.y + (targetVy - vel.y) * Math.min(1, 3.5 * dt);
@@ -218,6 +253,9 @@ export class PlayerController {
     if (mode === 'first-person') {
       this.camera.position.copy(eyePos);
       this.camera.lookAt(eyePos.clone().add(forward));
+      // Re-seat the follow rig so leaving first person does not glide the
+      // camera across the whole map
+      this._camSeated = false;
     } else {
       const dist = mode === 'shoulder' ? Math.max(4, cp.cameraDist * 0.7) : cp.cameraDist;
       const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -247,11 +285,58 @@ export class PlayerController {
       const groundY = this.terrainH.get(desired.x, desired.z) + 0.3;
       if (desired.y < groundY) desired.y = groundY;
 
-      this.camera.position.copy(desired);
+      // Damped follow: ease toward the desired pose instead of snapping each
+      // frame, which removes the jitter from terrain bumps and fast turns.
+      if (!this._camSeated || this.camera.position.distanceTo(desired) > 6) {
+        this.camera.position.copy(desired);
+        this._camSeated = true;
+      } else {
+        this.camera.position.lerp(desired, 1 - Math.exp(-CFG.player.cameraFollow * dt));
+      }
       this.camera.lookAt(lookTarget);
     }
 
+    // Sprint FOV kick: ease toward a slightly wider fov while sprinting and
+    // settle back afterwards. The base always tracks the settings slider.
+    const targetFov = CFG.settings.fov + (sprinting ? 8 : 0);
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, 8 * dt);
+      this.camera.updateProjectionMatrix();
+    }
+
     return lookTarget;
+  }
+
+  /**
+   * Apply damage from a mob hit or hazard. Gated by a short invulnerability
+   * window so a pack of monsters cannot delete the player in one frame.
+   */
+  damage(amount) {
+    if (this.dead || this.hurtCooldown > 0 || !(amount > 0)) return;
+    this.health = Math.max(0, this.health - amount);
+    this.hurtCooldown = CFG.player.hurtInvuln;
+    this.regenTimer = CFG.player.regenDelay;
+    if (this.health <= 0) {
+      this.dead = true;
+      this.deadTimer = CFG.player.respawnDelay;
+      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.onDeath?.();
+    } else {
+      this.onHurt?.();
+    }
+  }
+
+  _respawn() {
+    this.health = this.maxHealth;
+    this.hurtCooldown = 1; // brief spawn protection
+    this.regenTimer = 0;
+    this.dead = false;
+    this.body.setTranslation({ x: this.spawnPos.x, y: this.spawnPos.y, z: this.spawnPos.z }, true);
+    this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.yaw = 0;
+    this.pitch = 0.12;
+    this._camSeated = false;
+    this.onRespawn?.();
   }
 
   getPos() {

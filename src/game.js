@@ -170,12 +170,18 @@ export class Game {
     this.state = 'playing';
     this.ui.hideStart();
     this.ui.crosshair.classList.remove('hidden');
+    this.ui.showHud();
     this.input.reset();
 
     // Find a good spawn point
     const spY = this.terrainH.get(0, 0) + CFG.player.spawnY;
     this.player.spawnPos.set(0, spY, 0);
     this.player.init();
+
+    // Vitals hooks: hurt flashes the screen edge, death shows the overlay
+    this.player.onHurt = () => this.ui.flashDamage();
+    this.player.onDeath = () => this.ui.showDeath();
+    this.player.onRespawn = () => this.ui.hideDeath();
 
     // Pre-generate some chunks around spawn
     this.chunks.update(0, 0, CFG.settings.renderDist);
@@ -232,8 +238,8 @@ export class Game {
     // Chunks
     this.chunks.update(pPos.x, pPos.z, CFG.settings.renderDist);
 
-    // Bot AI
-    updateBots(this.entities, this.physics, this.terrainH, pPos, this.player.body, dt);
+    // Bot AI - the controller is passed so attacks can apply damage
+    updateBots(this.entities, this.physics, this.terrainH, pPos, this.player, dt);
 
     // Entity animations. Bots are excluded here - updateBots drives their
     // animators with the speed they actually moved this frame.
@@ -246,6 +252,9 @@ export class Game {
 
     // Audio
     this.audio.setMaster(CFG.settings.masterVol / 100);
+
+    // Health bar follows the player's vitals every frame
+    this.ui.updateHealth(this.player.health / this.player.maxHealth);
 
     // FPS counter
     this.frames++;

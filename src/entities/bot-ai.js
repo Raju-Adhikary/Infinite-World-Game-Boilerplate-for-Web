@@ -12,7 +12,9 @@ import { CFG } from '../config/config.js';
 const _bPos = new THREE.Vector3();
 const _mPos = new THREE.Vector3();
 
-export function updateBots(entities, physics, terrainH, playerPos, playerBody, dt) {
+export function updateBots(entities, physics, terrainH, playerPos, player, dt) {
+  // `player` is the PlayerController - the bot attack needs its body for the
+  // knockback impulse and its damage() for real hurt.
   const bots = entities.all().filter(bot => bot && bot.category === 'bot');
 
   for (const bot of bots) {
@@ -124,7 +126,7 @@ export function updateBots(entities, physics, terrainH, playerPos, playerBody, d
           bot.state = 'attack';
           bot.stateTimer = 0.35;
           bot.attackTimer = bot.attackCooldown || 1.2;
-          _attackPlayer(bot, playerPos, playerBody, bPos);
+          _attackPlayer(bot, playerPos, player, bPos);
           nextAction = 'attack';
           break;
         }
@@ -195,8 +197,9 @@ export function updateBots(entities, physics, terrainH, playerPos, playerBody, d
   }
 }
 
-function _attackPlayer(bot, playerPos, playerBody, bPos) {
-  if (!playerBody || typeof playerBody.applyImpulse !== 'function') return;
+function _attackPlayer(bot, playerPos, player, bPos) {
+  const body = player?.body;
+  if (!body || typeof body.applyImpulse !== 'function') return;
 
   const dx = playerPos.x - bPos.x;
   const dz = playerPos.z - bPos.z;
@@ -205,7 +208,11 @@ function _attackPlayer(bot, playerPos, playerBody, bPos) {
   const nz = dz / dist;
   const force = bot.attackForce || 8;
 
-  playerBody.applyImpulse({ x: nx * force, y: 1.5, z: nz * force }, true);
+  body.applyImpulse({ x: nx * force, y: 1.5, z: nz * force }, true);
+
+  // Damage on top of the knockback; the player controller gates it behind
+  // its invulnerability window and fires the UI hooks.
+  player.damage?.(bot.config?.damage || 6);
 }
 
 function _moveBot(bot, target, speed, dt, terrainH, physics) {

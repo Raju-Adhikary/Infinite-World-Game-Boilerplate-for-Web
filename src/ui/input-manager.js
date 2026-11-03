@@ -13,7 +13,8 @@ export class InputManager {
       left: false,
       right: false,
       jump: false,
-      interact: false
+      interact: false,
+      sprint: false
     };
     this.lookDelta = { x: 0, y: 0 };
     this.pointerLocked = false;
@@ -57,6 +58,7 @@ export class InputManager {
     this.actions.right = !!(this.keys['KeyD'] || this.keys['ArrowRight']);
     this.actions.jump = !!this.keys['Space'];
     this.actions.interact = !!this.keys['KeyE'];
+    this.actions.sprint = !!(this.keys['ShiftLeft'] || this.keys['ShiftRight']);
   }
 
   initTouch() {
@@ -200,7 +202,8 @@ export class InputManager {
       left: false,
       right: false,
       jump: false,
-      interact: false
+      interact: false,
+      sprint: false
     };
     this.lookDelta = { x: 0, y: 0 };
     this.joyVec = { x: 0, y: 0 };
