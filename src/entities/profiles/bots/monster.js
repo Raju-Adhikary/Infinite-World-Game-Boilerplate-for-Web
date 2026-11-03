@@ -24,6 +24,7 @@ export const monster = {
   attackRange: 1.8,
   attackCooldown: 1.5,
   attackForce: 6,
+  damage: 12,
   angryDuration: 6,
   biomes: ['swamp', 'jungle'],
   density: { swamp: 0.22, jungle: 0.28 },

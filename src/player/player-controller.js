@@ -24,6 +24,18 @@ export class PlayerController {
     this.body = null;
     this.avatar = null;
     this.spawnPos = new THREE.Vector3(0, CFG.player.spawnY, 0);
+
+    // Vitals
+    this.maxHealth = CFG.player.maxHealth;
+    this.health = this.maxHealth;
+    this.hurtCooldown = 0;
+    this.regenTimer = 0;
+    this.dead = false;
+    this.deadTimer = 0;
+    // UI hooks, assigned by Game: onHurt / onDeath / onRespawn
+    this.onHurt = null;
+    this.onDeath = null;
+    this.onRespawn = null;
   }
 
   _createAvatar() {
@@ -141,6 +153,23 @@ export class PlayerController {
   update(dt) {
     if (!this.body) return;
 
+    // Death flow: freeze the body, keep the overlay up, then wake up at spawn
+    if (this.dead) {
+      this.deadTimer -= dt;
+      if (this.deadTimer <= 0) this._respawn();
+      return this.getPos();
+    }
+
+    this.hurtCooldown = Math.max(0, this.hurtCooldown - dt);
+
+    // Slow regeneration once no damage has been taken for a while
+    if (this.health < this.maxHealth) {
+      this.regenTimer -= dt;
+      if (this.regenTimer <= 0) {
+        this.health = Math.min(this.maxHealth, this.health + CFG.player.regenRate * dt);
+      }
+    }
+
     const pos = this.physics.getBodyPos(this.body);
     const vel = this.body.linvel();
 
@@ -252,6 +281,37 @@ export class PlayerController {
     }
 
     return lookTarget;
+  }
+
+  /**
+   * Apply damage from a mob hit or hazard. Gated by a short invulnerability
+   * window so a pack of monsters cannot delete the player in one frame.
+   */
+  damage(amount) {
+    if (this.dead || this.hurtCooldown > 0 || !(amount > 0)) return;
+    this.health = Math.max(0, this.health - amount);
+    this.hurtCooldown = CFG.player.hurtInvuln;
+    this.regenTimer = CFG.player.regenDelay;
+    if (this.health <= 0) {
+      this.dead = true;
+      this.deadTimer = CFG.player.respawnDelay;
+      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.onDeath?.();
+    } else {
+      this.onHurt?.();
+    }
+  }
+
+  _respawn() {
+    this.health = this.maxHealth;
+    this.hurtCooldown = 1; // brief spawn protection
+    this.regenTimer = 0;
+    this.dead = false;
+    this.body.setTranslation({ x: this.spawnPos.x, y: this.spawnPos.y, z: this.spawnPos.z }, true);
+    this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.yaw = 0;
+    this.pitch = 0.12;
+    this.onRespawn?.();
   }
 
   getPos() {

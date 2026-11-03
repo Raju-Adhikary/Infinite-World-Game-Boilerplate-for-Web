@@ -49,6 +49,12 @@ export const CFG = {
     spawnY: 30,
     // Vertical speed while paddling up in water (see player-controller)
     swimUp: 2.6,
+    // Vitality: regen kicks in after regenDelay seconds without damage
+    maxHealth: 100,
+    regenDelay: 5,
+    regenRate: 4,
+    hurtInvuln: 0.6,   // seconds of immunity after taking a hit
+    respawnDelay: 2.0, // how long the death overlay stays up
   },
   biomes: {
     snow: { temp: [0, 0.22], moist: [0, 1], ground: 0xd8dce8, name: 'Snow' },

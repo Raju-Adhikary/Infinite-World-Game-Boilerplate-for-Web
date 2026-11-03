@@ -24,6 +24,7 @@ export const guard = {
   attackRange: 1.7,
   attackCooldown: 1.2,
   attackForce: 5,
+  damage: 8,
   angryDuration: 4,
   biomes: ['plains'],
   density: 0.1,
