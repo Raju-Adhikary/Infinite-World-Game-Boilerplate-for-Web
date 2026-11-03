@@ -194,7 +194,10 @@ export class ChunkManager {
 
           placed.push({ x: px, z: pz });
 
-          const py = this.terrainH.get(px, pz);
+          // Grid height, not the analytic field: the visible terrain mesh only
+          // samples the noise at its vertices, so using get() here let props
+          // hover or sink on curved slopes.
+          const py = this.terrainH.gridHeight(px, pz);
           const scale = sCfg.scale[0] + rng.next() * (sCfg.scale[1] - sCfg.scale[0]);
           const rotY = rng.next() * Math.PI * 2;
           const url = CFG.glbModels[sName];
@@ -259,7 +262,9 @@ export class ChunkManager {
       const pz = o.z + rng.range(4, S - 4);
       // Keep the world spawn area mob-free so the player never lands on a mob
       if (px * px + pz * pz < CFG.world.safeSpawnRadius * CFG.world.safeSpawnRadius) continue;
-      const py = this.terrainH.get(px, pz);
+      // Grid height keeps bot feet on the rendered surface instead of the
+      // analytic field the mesh only approximates.
+      const py = this.terrainH.gridHeight(px, pz);
       const url = CFG.glbModels[bName];
 
       const spawnBot = (model = null) => {

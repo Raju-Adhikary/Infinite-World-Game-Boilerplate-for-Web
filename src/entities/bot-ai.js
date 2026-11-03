@@ -201,7 +201,9 @@ function _moveBot(bot, target, speed, dt, terrainH, physics) {
 
   const newX = bPos.x + nx * step;
   const newZ = bPos.z + nz * step;
-  const newY = terrainH.get(newX, newZ);
+  // Follow the rendered terrain surface (see TerrainHeight.gridHeight) so mobs
+  // do not float above or clip into slopes while walking.
+  const newY = terrainH.gridHeight(newX, newZ);
 
   bot.mesh.position.set(
     newX - bot.mesh.parent.position.x,
