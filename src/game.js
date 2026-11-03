@@ -158,6 +158,11 @@ export class Game {
     // Keep the day cycle ticking slowly behind the menu
     this.sky.update(this.camera.position, dt * 0.5);
     this.water.update(this.camera.position, dt * 0.5, this.camera, this.sky);
+    // Stream the world around the origin behind the start screen so the menu
+    // looks at real terrain instead of an empty sky. Capped at 3 chunks of
+    // radius: the orbiting camera only sees that far, and PLAY spawns at
+    // (0, 0) anyway, so the ring is reused by the actual game.
+    this.chunks.update(0, 0, Math.min(CFG.settings.renderDist, 3));
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(() => this._renderIdle());
   }
