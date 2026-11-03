@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { _clamp } from '../core/utils.js';
 import { RAY_PROP_ONLY } from '../core/physics.js';
+import { CFG } from '../config/config.js';
 
 // Scratch vectors shared by the bot loop - allocating two Vector3 per bot per
 // frame churned the GC on entity-heavy scenes.
@@ -52,13 +53,18 @@ export function updateBots(entities, physics, terrainH, playerPos, playerBody, d
         }
         if (bot.stateTimer <= 0) {
           bot.state = 'wander';
-          const a = Math.random() * Math.PI * 2;
           const d = 5 + Math.random() * 10;
-          bot.targetPos = new THREE.Vector3(
-            bPos.x + Math.cos(a) * d,
-            0,
-            bPos.z + Math.sin(a) * d
-          );
+          const pick = () => {
+            const a = Math.random() * Math.PI * 2;
+            return { x: bPos.x + Math.cos(a) * d, z: bPos.z + Math.sin(a) * d };
+          };
+          let t = pick();
+          // Mobs cannot swim - re-roll a couple of times before committing to
+          // a target that sits at the bottom of a lake.
+          for (let tries = 0; tries < 2 && terrainH.gridHeight(t.x, t.z) < CFG.world.waterLevel + 0.3; tries++) {
+            t = pick();
+          }
+          bot.targetPos = new THREE.Vector3(t.x, 0, t.z);
           bot.stateTimer = 4 + Math.random() * 5;
         }
         nextAction = 'idle';

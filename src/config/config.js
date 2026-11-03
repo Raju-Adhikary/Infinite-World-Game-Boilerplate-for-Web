@@ -29,6 +29,9 @@ export const CFG = {
     // Day-night cycle
     dayLength: 240,   // real seconds for one full day+night cycle
     dayStart: 0.3,    // time of day the game starts at (0.25 = sunrise, 0.5 = noon)
+    // Lakes fill every basin below this height (~13% of the seed-42 world;
+    // terrain spans 2.7..15.0 with an average of 9.0)
+    waterLevel: 7.0,
     // Bots never spawn inside this radius around the world origin (player spawn)
     safeSpawnRadius: 14,
   },
@@ -44,6 +47,8 @@ export const CFG = {
     cameraMinPitch: -1.2,
     cameraMaxPitch: 1.2,
     spawnY: 30,
+    // Vertical speed while paddling up in water (see player-controller)
+    swimUp: 2.6,
   },
   biomes: {
     snow: { temp: [0, 0.22], moist: [0, 1], ground: 0xd8dce8, name: 'Snow' },
