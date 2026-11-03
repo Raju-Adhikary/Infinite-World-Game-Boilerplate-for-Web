@@ -39,9 +39,13 @@ export const CFG = {
     height: 1.8,
     radius: 0.4,
     moveSpeed: 5.5,
+    // Hold Shift to sprint (multiplier on moveSpeed)
+    sprintMult: 1.65,
     jumpForce: 7,
     cameraDist: 7,
     cameraHeight: 2.2,
+    // Damping rate of the third-person camera follow (higher = tighter)
+    cameraFollow: 12,
     // Symmetric pitch limits: the old clamp (-0.3..1.2) barely allowed looking
     // down while letting the camera dive under the terrain when looking up.
     cameraMinPitch: -1.2,
