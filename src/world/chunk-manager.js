@@ -11,6 +11,11 @@ import { Noise } from '../core/noise.js';
 import { createBotMesh } from '../entities/bot-mesh.js';
 import { createProceduralAnimator, createSwayAnimator } from '../entities/procedural-animator.js';
 
+// Shoreline palette blended in around the water line
+const SAND = new THREE.Color(0xc2b280);
+const MUD = new THREE.Color(0x565040);
+const _tc = new THREE.Color();
+
 export class ChunkManager {
   constructor(scene, physics, entities, glbCache, terrainH, biomeSys) {
     this.scene = scene;
@@ -122,7 +127,15 @@ export class ChunkManager {
       pos.setY(i, h);
 
       const b = this.biome.get(wx, wz);
-      const c = new THREE.Color(this.biome.getColor(b));
+      const c = _tc.setHex(this.biome.getColor(b));
+
+      // Sandy shores just above the water line, murky lakebeds below it
+      if (h < CFG.world.waterLevel + 0.5) {
+        c.lerp(SAND, _clamp((CFG.world.waterLevel + 0.5 - h) / 1.2, 0, 1) * 0.85);
+        if (h < CFG.world.waterLevel - 0.3) {
+          c.lerp(MUD, _clamp((CFG.world.waterLevel - 0.3 - h) / 2.5, 0, 1) * 0.7);
+        }
+      }
 
       // Slight variation
       const v = this.noise.n2(wx * 0.05, wz * 0.05) * 0.08;
@@ -192,9 +205,15 @@ export class ChunkManager {
           }
           if (tooClose) continue;
 
+          // Grid height, not the analytic field: the visible terrain mesh only
+          // samples the noise at its vertices, so using get() here let props
+          // hover or sink on curved slopes.
+          const py = this.terrainH.gridHeight(px, pz);
+          // Keep flora, rocks and houses out of lakes and their beds
+          if (py < CFG.world.waterLevel + 0.3) continue;
+
           placed.push({ x: px, z: pz });
 
-          const py = this.terrainH.get(px, pz);
           const scale = sCfg.scale[0] + rng.next() * (sCfg.scale[1] - sCfg.scale[0]);
           const rotY = rng.next() * Math.PI * 2;
           const url = CFG.glbModels[sName];
@@ -259,7 +278,11 @@ export class ChunkManager {
       const pz = o.z + rng.range(4, S - 4);
       // Keep the world spawn area mob-free so the player never lands on a mob
       if (px * px + pz * pz < CFG.world.safeSpawnRadius * CFG.world.safeSpawnRadius) continue;
-      const py = this.terrainH.get(px, pz);
+      // Grid height keeps bot feet on the rendered surface instead of the
+      // analytic field the mesh only approximates.
+      const py = this.terrainH.gridHeight(px, pz);
+      // No mobs standing around at the bottom of a lake
+      if (py < CFG.world.waterLevel + 0.3) continue;
       const url = CFG.glbModels[bName];
 
       const spawnBot = (model = null) => {

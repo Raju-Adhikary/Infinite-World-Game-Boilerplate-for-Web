@@ -4,6 +4,13 @@
  */
 import * as THREE from 'three';
 import { _clamp } from '../core/utils.js';
+import { RAY_PROP_ONLY } from '../core/physics.js';
+import { CFG } from '../config/config.js';
+
+// Scratch vectors shared by the bot loop - allocating two Vector3 per bot per
+// frame churned the GC on entity-heavy scenes.
+const _bPos = new THREE.Vector3();
+const _mPos = new THREE.Vector3();
 
 export function updateBots(entities, physics, terrainH, playerPos, playerBody, dt) {
   const bots = entities.all().filter(bot => bot && bot.category === 'bot');
@@ -16,8 +23,7 @@ export function updateBots(entities, physics, terrainH, playerPos, playerBody, d
     bot.angerTimer = Math.max(0, (bot.angerTimer || 0) - dt);
     bot.currentSpeed = 0;
 
-    const bPos = new THREE.Vector3();
-    bot.mesh.getWorldPosition(bPos);
+    const bPos = bot.mesh.getWorldPosition(_bPos);
 
     const behavior = bot.behavior || (bot.flee > 0 ? 'flee' : bot.attackRange > 0 ? 'aggressive' : 'passive');
     const attackRange = bot.attackRange || 0;
@@ -36,24 +42,29 @@ export function updateBots(entities, physics, terrainH, playerPos, playerBody, d
           bot.state = 'flee';
           break;
         }
-        if (behavior === 'aggressive' && dist < bot.detect) {
+        if (behavior === 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos)) {
           bot.state = 'angry';
           bot.angerTimer = Math.max(bot.angerTimer, bot.angryDuration || 3);
           break;
         }
-        if (bot.flee === 0 && behavior !== 'aggressive' && dist < bot.detect) {
+        if (bot.flee === 0 && behavior !== 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos)) {
           bot.state = 'follow';
           break;
         }
         if (bot.stateTimer <= 0) {
           bot.state = 'wander';
-          const a = Math.random() * Math.PI * 2;
           const d = 5 + Math.random() * 10;
-          bot.targetPos = new THREE.Vector3(
-            bPos.x + Math.cos(a) * d,
-            0,
-            bPos.z + Math.sin(a) * d
-          );
+          const pick = () => {
+            const a = Math.random() * Math.PI * 2;
+            return { x: bPos.x + Math.cos(a) * d, z: bPos.z + Math.sin(a) * d };
+          };
+          let t = pick();
+          // Mobs cannot swim - re-roll a couple of times before committing to
+          // a target that sits at the bottom of a lake.
+          for (let tries = 0; tries < 2 && terrainH.gridHeight(t.x, t.z) < CFG.world.waterLevel + 0.3; tries++) {
+            t = pick();
+          }
+          bot.targetPos = new THREE.Vector3(t.x, 0, t.z);
           bot.stateTimer = 4 + Math.random() * 5;
         }
         nextAction = 'idle';
@@ -64,12 +75,23 @@ export function updateBots(entities, physics, terrainH, playerPos, playerBody, d
           bot.state = 'flee';
           break;
         }
-        if (behavior === 'aggressive' && dist < bot.detect) {
+        if (behavior === 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos)) {
           bot.state = 'angry';
           bot.angerTimer = Math.max(bot.angerTimer, bot.angryDuration || 3);
           break;
         }
-        if (!bot.targetPos || bPos.distanceTo(bot.targetPos) < 1.5 || bot.stateTimer <= 0) {
+        // 2D arrival test: wander targets are stored with y = 0 while bots
+        // walk on terrain at y = height, so the old 3D distanceTo() could
+        // never drop under the threshold and wander only ended via timeout.
+        if (bot.targetPos) {
+          const adx = bot.targetPos.x - bPos.x;
+          const adz = bot.targetPos.z - bPos.z;
+          if (adx * adx + adz * adz < 2.25 || bot.stateTimer <= 0) {
+            bot.state = 'idle';
+            bot.stateTimer = 2 + Math.random() * 3;
+            break;
+          }
+        } else if (bot.stateTimer <= 0) {
           bot.state = 'idle';
           bot.stateTimer = 2 + Math.random() * 3;
           break;
@@ -187,8 +209,7 @@ function _attackPlayer(bot, playerPos, playerBody, bPos) {
 }
 
 function _moveBot(bot, target, speed, dt, terrainH, physics) {
-  const bPos = new THREE.Vector3();
-  bot.mesh.getWorldPosition(bPos);
+  const bPos = bot.mesh.getWorldPosition(_mPos);
 
   const dx = target.x - bPos.x;
   const dz = target.z - bPos.z;
@@ -199,9 +220,37 @@ function _moveBot(bot, target, speed, dt, terrainH, physics) {
   const nz = dz / dist;
   const step = speed * dt;
 
-  const newX = bPos.x + nx * step;
-  const newZ = bPos.z + nz * step;
-  const newY = terrainH.get(newX, newZ);
+  // Steer around props. Kinematic bodies follow their scripted path no matter
+  // what, so without this check mobs ghosted straight through trees, rocks
+  // and houses. The ray is capped short of the destination so the player's
+  // own capsule (same collision group as props) never reads as a wall while
+  // a mob closes in for the attack.
+  let mx = nx;
+  let mz = nz;
+  const rayLen = Math.min(1.4, dist - 0.9);
+  if (rayLen > 0.3 && _blocked(physics, bPos, nx, nz, rayLen)) {
+    let clear = false;
+    for (const deg of [40, -40, 80, -80]) {
+      const a = deg * Math.PI / 180;
+      const cx = nx * Math.cos(a) - nz * Math.sin(a);
+      const cz = nx * Math.sin(a) + nz * Math.cos(a);
+      if (!_blocked(physics, bPos, cx, cz, rayLen)) {
+        mx = cx;
+        mz = cz;
+        clear = true;
+        break;
+      }
+    }
+    // Boxed in on every side - hold position this frame instead of
+    // clipping through the obstacle.
+    if (!clear) return;
+  }
+
+  const newX = bPos.x + mx * step;
+  const newZ = bPos.z + mz * step;
+  // Follow the rendered terrain surface (see TerrainHeight.gridHeight) so mobs
+  // do not float above or clip into slopes while walking.
+  const newY = terrainH.gridHeight(newX, newZ);
 
   bot.mesh.position.set(
     newX - bot.mesh.parent.position.x,
@@ -214,4 +263,31 @@ function _moveBot(bot, target, speed, dt, terrainH, physics) {
 
   bot.position.set(newX, newY, newZ);
   bot.currentSpeed = speed; // remembered for the procedural walk animation
+}
+
+function _blocked(physics, origin, dx, dz, len) {
+  const from = { x: origin.x, y: origin.y + 0.7, z: origin.z };
+  const to = { x: origin.x + dx * len, y: origin.y + 0.7, z: origin.z + dz * len };
+  return physics.raycast(from, to, RAY_PROP_ONLY) !== null;
+}
+
+/**
+ * True when nothing stands between the bot's eyes and the player's chest.
+ * The ray stops 0.8 short of the chest so the player capsule never counts as
+ * an obstruction, and starts inside the bot's own capsule which raycast()
+ * already ignores (solid = false).
+ */
+function _hasLos(physics, bPos, playerPos) {
+  const fx = bPos.x;
+  const fy = bPos.y + 1.4;
+  const fz = bPos.z;
+  const dx = playerPos.x - fx;
+  const dy = playerPos.y + 0.9 - fy;
+  const dz = playerPos.z - fz;
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (dist <= 1.2) return true;
+
+  const t = (dist - 0.8) / dist;
+  const to = { x: fx + dx * t, y: fy + dy * t, z: fz + dz * t };
+  return physics.raycast({ x: fx, y: fy, z: fz }, to) === null;
 }

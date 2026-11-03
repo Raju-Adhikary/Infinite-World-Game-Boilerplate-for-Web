@@ -9,10 +9,13 @@ import { _uid } from './utils.js';
 // Interaction groups (rapier format: membership << 16 | filter).
 // Bit 0 = terrain, bit 1 = props and characters. Both still collide with
 // everything as before; the groups exist so the camera ray can query the
-// terrain alone (FILTER_TERRAIN_ONLY) without props popping the camera in.
+// terrain alone (FILTER_TERRAIN_ONLY) without props popping the camera in,
+// and mob steering rays can query props alone (RAY_PROP_ONLY) without every
+// slope registering as a wall.
 export const GROUP_TERRAIN = 0x0001ffff;
 export const GROUP_PROP = 0x0002ffff;
 export const FILTER_TERRAIN_ONLY = 0x00010001;
+export const RAY_PROP_ONLY = 0x00020002;
 
 export class PhysicsWorld {
   constructor() {

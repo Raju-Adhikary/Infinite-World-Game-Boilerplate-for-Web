@@ -160,15 +160,27 @@ export class PlayerController {
 
     if (dir.lengthSq() > 0) dir.normalize();
 
-    const spd = CFG.player.moveSpeed;
-    this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
+    const p = this.body.translation();
+
+    // Wading and swimming: below the water line gravity is replaced by a
+    // buoyant blend toward paddle-up (hold Space) or a slow sink, and
+    // horizontal movement slows down. The player can wade across shallows
+    // and dive to the lakebed.
+    const submerged = p.y < CFG.world.waterLevel - 0.2;
+    const spd = CFG.player.moveSpeed * (submerged ? 0.55 : 1);
+    if (submerged) {
+      const targetVy = this.input.actions.jump ? CFG.player.swimUp : -0.8;
+      const vy = vel.y + (targetVy - vel.y) * Math.min(1, 3.5 * dt);
+      this.body.setLinvel({ x: dir.x * spd, y: vy, z: dir.z * spd }, true);
+    } else {
+      this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
+    }
 
     // Ground check via raycast. The ray starts slightly above the feet and
     // physics.raycast uses solid=false, so the player's own capsule (which
     // contains the ray origin) is ignored - a solid raycast from inside the
     // body reported "grounded" every frame at toi=0. The downward-velocity
     // guard keeps the ascending phase of a jump from re-triggering it.
-    const p = this.body.translation();
     const rayFrom = { x: p.x, y: p.y + 0.1, z: p.z };
     const rayTo = { x: p.x, y: p.y - 0.5, z: p.z };
     const hit = this.physics.raycast(rayFrom, rayTo);
@@ -176,7 +188,7 @@ export class PlayerController {
     // to `timeOfImpact`) - reading only the new name made grounded forever
     // false, so jumping never worked.
     const hitDist = hit ? (hit.timeOfImpact ?? hit.toi) : null;
-    this.grounded = hit !== null && hitDist < 0.45 && vel.y <= 0.1;
+    this.grounded = hit !== null && hitDist < 0.45 && vel.y <= 0.1 && !submerged;
 
     // Jump (keep current horizontal velocity; the stale pre-movement value
     // captured above would cancel the speed the player just accelerated to)

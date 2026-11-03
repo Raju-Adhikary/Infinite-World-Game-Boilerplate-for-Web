@@ -68,6 +68,14 @@ export class SkySystem {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
+  /**
+   * The blended sky color of the CURRENT frame. The water system snapshots it
+   * when the camera surfaces so the background snaps back seamlessly.
+   */
+  get skyColor() {
+    return this._skyColor;
+  }
+
   _createSun() {
     const sunMat = new THREE.MeshBasicMaterial({
       color: new THREE.Color(CFG.world.sunColor),

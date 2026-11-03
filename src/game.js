@@ -14,6 +14,7 @@ import { TerrainHeight } from './world/terrain-height.js';
 import { BiomeSystem } from './world/biome-system.js';
 import { ChunkManager } from './world/chunk-manager.js';
 import { SkySystem } from './world/sky-system.js';
+import { WaterSystem } from './world/water-system.js';
 import { PlayerController } from './player/player-controller.js';
 import { updateBots } from './entities/bot-ai.js';
 
@@ -101,6 +102,8 @@ export class Game {
     this.biome = new BiomeSystem(CFG.world.seed);
     // The sky system owns the day-night cycle and drives all three lights
     this.sky = new SkySystem(this.scene, { sun, hemi, ambient: amb });
+    // One global water surface fills every basin below the water level
+    this.water = new WaterSystem(this.scene);
     this.physics = new PhysicsWorld();
     await this.physics.init();
     this.chunks = new ChunkManager(this.scene, this.physics, this.entities, this.glb, this.terrainH, this.biome);
@@ -154,6 +157,7 @@ export class Game {
     this.camera.lookAt(0, 5, 0);
     // Keep the day cycle ticking slowly behind the menu
     this.sky.update(this.camera.position, dt * 0.5);
+    this.water.update(this.camera.position, dt * 0.5, this.camera, this.sky);
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(() => this._renderIdle());
   }
@@ -221,6 +225,9 @@ export class Game {
     // Sky drives the day-night cycle: celestial meshes, stars, cloud tint
     // and every scene light (sun/moon directional, hemisphere, ambient)
     this.sky.update(pPos, dt);
+    // Water follows the player, animates its surface and takes care of
+    // underwater fog (runs after the sky so it can override fog color)
+    this.water.update(pPos, dt, this.camera, this.sky);
 
     // Chunks
     this.chunks.update(pPos.x, pPos.z, CFG.settings.renderDist);
