@@ -102,8 +102,9 @@ export class Game {
     this.biome = new BiomeSystem(CFG.world.seed);
     // The sky system owns the day-night cycle and drives all three lights
     this.sky = new SkySystem(this.scene, { sun, hemi, ambient: amb });
-    // One global water surface fills every basin below the water level
-    this.water = new WaterSystem(this.scene);
+    // One global water surface fills every basin below the water level.
+    // It needs the terrain sampler to calm its waves in shallow water.
+    this.water = new WaterSystem(this.scene, this.terrainH);
     this.physics = new PhysicsWorld();
     await this.physics.init();
     this.chunks = new ChunkManager(this.scene, this.physics, this.entities, this.glb, this.terrainH, this.biome);
