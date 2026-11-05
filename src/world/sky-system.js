@@ -48,6 +48,9 @@ export class SkySystem {
 
     this.sunDir = new THREE.Vector3(0.6, 0.8, 0.4).normalize();
     this.moonDir = new THREE.Vector3().copy(this.sunDir).negate();
+    // Tilted celestial pole for the star dome (independent of the sun/moon
+    // path, which circles the Z axis)
+    this._starAxis = new THREE.Vector3(0.42, 1, 0.24).normalize();
 
     this._skyColor = new THREE.Color();
     this._cloudColor = new THREE.Color();
@@ -124,12 +127,14 @@ export class SkySystem {
   }
 
   _createStars() {
-    const N = 450;
+    const N = 700;
     const pos = new Float32Array(N * 3);
     const v = new THREE.Vector3();
+    // Full sphere: the dome rotates on its own tilted axis (see update), so
+    // stars spend part of the night below the horizon and rise again - a
+    // hemisphere-only shell would show holes when rotated off-axis
     for (let i = 0; i < N; i++) {
       v.randomDirection();
-      v.y = Math.abs(v.y) * 0.9 + 0.06; // keep stars above the horizon
       v.normalize().multiplyScalar(320);
       pos[i * 3] = v.x;
       pos[i * 3 + 1] = v.y;
@@ -265,10 +270,14 @@ export class SkySystem {
     this.sunMesh.visible = sunEl > -0.25;
     this.moonMesh.visible = this.moonDir.y > -0.25;
 
-    // --- stars rotate with the celestial sphere, fade in at dusk ---
+    // --- stars rotate on their own tilted celestial axis, fading in at dusk.
+    // They previously spun with rotation.z = ang - the exact angle AND axis
+    // of the sun/moon path - so the whole night sky stayed glued to the moon
+    // and visibly "moved with the moon". A different axis gives the stars
+    // independent motion across the night sky.
     const night = 1 - day;
     this.starGroup.position.copy(playerPos);
-    this.starGroup.rotation.z = ang;
+    this.starGroup.setRotationFromAxisAngle(this._starAxis, ang * 0.75);
     this.starMat.opacity = night * 0.9;
     this.starGroup.visible = night > 0.05;
 
