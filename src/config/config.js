@@ -9,9 +9,21 @@ export const CFG = {
   world: {
     chunkSize: 64,
     chunkSegments: 28,
-    heightScale: 18,
+    // Taller hills: the height field also gets a quadratic highland boost in
+    // terrain-height.js, so peaks reach roughly twice the old relief
+    heightScale: 26,
     heightFreq: 0.008,
     heightOctaves: 5,
+    // Continental mask (very low frequency noise) that separates land from
+    // ocean. Where it dips below oceanLevel the terrain sinks into a sea
+    // basin; coastWidth is the smooth beach-to-shallow transition band.
+    continentFreq: 0.0012,
+    oceanLevel: 0.36,
+    coastWidth: 0.14,
+    // Mountain dressing on the terrain colors: rock above rockLine,
+    // snow caps above snowLine (absolute world Y)
+    rockLine: 15,
+    snowLine: 20,
     loadRadius: 3,
     unloadRadius: 5,
     chunksPerFrame: 2,
@@ -26,13 +38,15 @@ export const CFG = {
     sunIntensity: 1.4,
     sunDir: [0.6, 0.8, 0.4],
     shadowMapSize: 2048,
-    // Day-night cycle
+    // World spawn coordinates. Filled from the ?x=/?z= URL params or the
+    // land-finding search in game.js - never hardcode a spawn position.
+    spawnX: 0,
+    spawnZ: 0,
     dayLength: 240,   // real seconds for one full day+night cycle
     dayStart: 0.3,    // time of day the game starts at (0.25 = sunrise, 0.5 = noon)
-    // Lakes fill every basin below this height (~13% of the seed-42 world;
-    // terrain spans 2.7..15.0 with an average of 9.0)
+    // Lakes AND oceans fill every basin below this height
     waterLevel: 7.0,
-    // Bots never spawn inside this radius around the world origin (player spawn)
+    // Bots never spawn inside this radius around the world spawn point
     safeSpawnRadius: 14,
   },
   player: {
@@ -68,6 +82,10 @@ export const CFG = {
     spawnY: 30,
     // Vertical speed while paddling up in water (see player-controller)
     swimUp: 2.6,
+    // Vertical speed of the leap when a held jump reaches the water surface:
+    // paddle speed alone cannot beat the fall gravity, so surfacing would
+    // otherwise end in an endless bob right below the waterline
+    surfaceLeap: 6,
     // Vitality: regen kicks in after regenDelay seconds without damage
     maxHealth: 100,
     regenDelay: 5,

@@ -8,6 +8,24 @@ export const _lerp = (a, b, t) => a + (b - a) * t;
 export const _key = (x, z) => `${x},${z}`;
 
 /**
+ * Deterministic hash of a world coordinate pair under a seed.
+ *
+ * Every coordinate-driven random decision (per-chunk prop and bot placement,
+ * jitter, rotations) must derive its RNG stream from THIS hash instead of
+ * Math.random(), so the same seed always produces the exact same world no
+ * matter the machine, load order or session. Murmur-style integer finalizer:
+ * spreads neighboring coordinates far apart, unlike plain xor of products.
+ */
+export function hashChunk(seed, cx, cz) {
+  let h = (seed | 0) ^ 0x9e3779b9;
+  h = Math.imul(h ^ (cx | 0), 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h ^ (cz | 0), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
  * Seeded Random Number Generator
  */
 export class SeededRandom {

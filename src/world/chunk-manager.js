@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import Rapier from '@dimforge/rapier3d-compat';
 import { CFG } from '../config/config.js';
-import { SeededRandom, _key, _clamp } from '../core/utils.js';
+import { SeededRandom, _key, _clamp, hashChunk } from '../core/utils.js';
 import { GROUP_TERRAIN, GROUP_PROP } from '../core/physics.js';
 import { Noise } from '../core/noise.js';
 import { createBotMesh } from '../entities/bot-mesh.js';
@@ -14,6 +14,9 @@ import { createProceduralAnimator, createSwayAnimator } from '../entities/proced
 // Shoreline palette blended in around the water line
 const SAND = new THREE.Color(0xc2b280);
 const MUD = new THREE.Color(0x565040);
+// Mountain dressing above the rock/snow lines
+const ROCK = new THREE.Color(0x6b6560);
+const SNOW = new THREE.Color(0xe8ecf2);
 const _tc = new THREE.Color();
 
 export class ChunkManager {
@@ -137,6 +140,14 @@ export class ChunkManager {
         }
       }
 
+      // Mountain slopes turn to rock, the peaks carry snow caps
+      if (h > CFG.world.rockLine) {
+        c.lerp(ROCK, _clamp((h - CFG.world.rockLine) / 3, 0, 1) * 0.85);
+      }
+      if (h > CFG.world.snowLine) {
+        c.lerp(SNOW, _clamp((h - CFG.world.snowLine) / 4, 0, 1));
+      }
+
       // Slight variation
       const v = this.noise.n2(wx * 0.05, wz * 0.05) * 0.08;
       colors[i * 3] = _clamp(c.r + v, 0, 1);
@@ -176,7 +187,9 @@ export class ChunkManager {
     const S = this.cfg.chunkSize;
     const cellSize = 8;
     const cells = Math.floor(S / cellSize);
-    const rng = new SeededRandom(cx * 73856093 ^ cz * 19349663 ^ this.cfg.seed);
+    // RNG stream derived from (seed, chunkX, chunkZ) - the same chunk always
+    // fills with the same props for a given world seed
+    const rng = new SeededRandom(hashChunk(this.cfg.seed, cx, cz));
     const placed = [];
 
     for (let gx = 0; gx < cells; gx++) {
@@ -262,7 +275,7 @@ export class ChunkManager {
 
   _spawnBots(cd, o, cx, cz) {
     const S = this.cfg.chunkSize;
-    const rng = new SeededRandom(cx * 12345 ^ cz * 67890 ^ this.cfg.seed + 111);
+    const rng = new SeededRandom(hashChunk(this.cfg.seed, cx, cz) ^ 0x5bd1e995);
 
     for (const [bName, bCfg] of Object.entries(CFG.bots)) {
       const biome = this.biome.get(o.x + S / 2, o.z + S / 2);
@@ -277,7 +290,9 @@ export class ChunkManager {
       const px = o.x + rng.range(4, S - 4);
       const pz = o.z + rng.range(4, S - 4);
       // Keep the world spawn area mob-free so the player never lands on a mob
-      if (px * px + pz * pz < CFG.world.safeSpawnRadius * CFG.world.safeSpawnRadius) continue;
+      const sx = px - CFG.world.spawnX;
+      const sz = pz - CFG.world.spawnZ;
+      if (sx * sx + sz * sz < CFG.world.safeSpawnRadius * CFG.world.safeSpawnRadius) continue;
       // Grid height keeps bot feet on the rendered surface instead of the
       // analytic field the mesh only approximates.
       const py = this.terrainH.gridHeight(px, pz);

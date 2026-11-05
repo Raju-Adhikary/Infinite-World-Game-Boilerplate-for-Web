@@ -23,6 +23,11 @@ export class UIManager {
     this.prevSettings = null;
     this._vignetteTimer = null;
 
+    // Show the active world seed on the menu footer - it fully determines
+    // the generated world and can be shared via ?seed=
+    const seedLabel = document.getElementById('seed-label');
+    if (seedLabel) seedLabel.textContent = `seed ${CFG.world.seed}`;
+
     // Settings must load BEFORE the controls bind: binding a range input
     // fires its callback once with the DOM's uninitialized midpoint value,
     // which used to override every saved slider setting (render distance
@@ -259,6 +264,7 @@ export class UIManager {
       `<span class="dbg-label">Tris</span> <span class="dbg-val">${(data.triangles / 1000).toFixed(1)}k</span><br>` +
       `<span class="dbg-label">Biome</span> <span class="dbg-val">${data.biome}</span><br>` +
       `<span class="dbg-label">Time</span> <span class="dbg-val">${data.time ?? '--:--'}</span><br>` +
+      `<span class="dbg-label">Seed</span> <span class="dbg-val">${data.seed ?? '--'}</span><br>` +
       (data.entityTypes ? `<span class="dbg-label">Types</span> <span class="dbg-val">${Object.entries(data.entityTypes).map(([k, v]) => k + ':' + v).join(' ')}</span>` : '');
   }
 }

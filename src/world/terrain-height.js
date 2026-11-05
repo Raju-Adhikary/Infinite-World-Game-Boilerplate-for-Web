@@ -1,25 +1,55 @@
 /**
  * Terrain Height Generator
  * Procedurally generates terrain heights using noise
+ *
+ * The field has two layers:
+ * - a low-frequency CONTINENTAL mask that decides land vs ocean, giving the
+ *   world large connected sea basins with smooth beaches between them
+ * - the classic FBM height field, boosted quadratically in the upper range
+ *   so highlands rise into real mountains instead of gentle hills
  */
 import { Noise } from '../core/noise.js';
 import { CFG } from '../config/config.js';
-import { _lerp } from '../core/utils.js';
+import { _lerp, _clamp } from '../core/utils.js';
 
 export class TerrainHeight {
   constructor(seed) {
     this.n = new Noise(seed);
+    // Independent stream for the continental mask so land/ocean layout can be
+    // tuned without disturbing the hill shapes
+    this.cont = new Noise(seed + 4242);
     this.cfg = CFG.world;
   }
 
   get(wx, wz) {
-    return this.n.fbm(
-      wx * this.cfg.heightFreq,
-      wz * this.cfg.heightFreq,
-      this.cfg.heightOctaves,
+    const c = this.cfg;
+
+    // Large-scale continents: below oceanLevel the region sinks into an
+    // ocean basin, above it the land rises. Features are ~800m across.
+    const cont = this.cont.fbm(
+      wx * c.continentFreq,
+      wz * c.continentFreq,
+      3, 2.0, 0.5
+    );
+
+    // Coast falloff: 0 inland .. 1 open ocean, smooth across the beach zone
+    const t = _clamp((cont - c.oceanLevel) / c.coastWidth, 0, 1);
+    const ocean = 1 - t * t * (3 - 2 * t);
+
+    // Rolling hills with a quadratic highland boost for taller mountains
+    const base = this.n.fbm(
+      wx * c.heightFreq,
+      wz * c.heightFreq,
+      c.heightOctaves,
       2.0,
       0.48
-    ) * this.cfg.heightScale;
+    );
+    const landH = base * c.heightScale * (0.55 + 1.35 * base);
+
+    // Sea floor: sinks with distance from the coast, well below the surface
+    const seaH = c.waterLevel - 4 - 20 * (1 - t);
+
+    return _lerp(landH, seaH, ocean);
   }
 
   /**

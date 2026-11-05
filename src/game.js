@@ -15,6 +15,7 @@ import { BiomeSystem } from './world/biome-system.js';
 import { ChunkManager } from './world/chunk-manager.js';
 import { SkySystem } from './world/sky-system.js';
 import { WaterSystem } from './world/water-system.js';
+import { WaterEffects } from './world/water-effects.js';
 import { PlayerController } from './player/player-controller.js';
 import { updateBots } from './entities/bot-ai.js';
 
@@ -31,6 +32,10 @@ export class Game {
   }
 
   async boot() {
+    // Pin the world seed and spawn coordinates from the URL (?seed=&x=&z=)
+    // BEFORE anything that generates content is constructed
+    this._applyWorldRequest();
+
     const input = new InputManager();
     const ui = new UIManager(input);
     this.ui = ui;
@@ -105,6 +110,8 @@ export class Game {
     // One global water surface fills every basin below the water level.
     // It needs the terrain sampler to calm its waves in shallow water.
     this.water = new WaterSystem(this.scene, this.terrainH);
+    // Fake splash feedback on the surface: shader ripple rings + droplets
+    this.waterFx = new WaterEffects(this.scene);
     this.physics = new PhysicsWorld();
     await this.physics.init();
     this.chunks = new ChunkManager(this.scene, this.physics, this.entities, this.glb, this.terrainH, this.biome);
@@ -140,6 +147,30 @@ export class Game {
     this._renderIdle();
   }
 
+  /**
+   * Seed and coordinate mechanism. Terrain, biomes and every per-chunk prop
+   * and bot placement derive from CFG.world.seed (via hashChunk), so a seed
+   * fully determines the world. The seed and spawn coordinates can be pinned
+   * through the URL (?seed=1234&x=100&z=-50), the seed persists across
+   * sessions in localStorage, and the menu footer shows the active seed so a
+   * world can be shared and regenerated exactly.
+   */
+  _applyWorldRequest() {
+    const q = new URLSearchParams(location.search);
+    let seed = parseInt(q.get('seed'), 10);
+    if (!Number.isFinite(seed)) {
+      try { seed = parseInt(localStorage.getItem('ge_seed'), 10); } catch (err) { /* storage unavailable */ }
+    }
+    if (!Number.isFinite(seed) || seed <= 0) seed = CFG.world.seed;
+    CFG.world.seed = Math.floor(seed);
+    try { localStorage.setItem('ge_seed', String(CFG.world.seed)); } catch (err) { /* storage unavailable */ }
+
+    const x = parseFloat(q.get('x'));
+    const z = parseFloat(q.get('z'));
+    if (Number.isFinite(x)) CFG.world.spawnX = x;
+    if (Number.isFinite(z)) CFG.world.spawnZ = z;
+  }
+
   _resize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
@@ -159,6 +190,7 @@ export class Game {
     // Keep the day cycle ticking slowly behind the menu
     this.sky.update(this.camera.position, dt * 0.5);
     this.water.update(this.camera.position, dt * 0.5, this.camera, this.sky);
+    this.waterFx.update(dt * 0.5);
     // Stream the world around the origin behind the start screen so the menu
     // looks at real terrain instead of an empty sky. Capped at 3 chunks of
     // radius: the orbiting camera only sees that far, and PLAY spawns at
@@ -179,9 +211,11 @@ export class Game {
     this.ui.showHud();
     this.input.reset();
 
-    // Find a good spawn point
-    const spY = this.terrainH.get(0, 0) + CFG.player.spawnY;
-    this.player.spawnPos.set(0, spY, 0);
+    // Find a good spawn point: the requested coordinates when they are on
+    // dry land, otherwise the nearest shore found by a spiral search - so
+    // every seed is playable even when its origin sits mid-ocean
+    const sp = this._findSpawn(CFG.world.spawnX, CFG.world.spawnZ);
+    this.player.spawnPos.set(sp.x, this.terrainH.get(sp.x, sp.z) + CFG.player.spawnY, sp.z);
     this.player.init();
 
     // Vitals hooks: hurt flashes the screen edge, death shows the overlay
@@ -195,6 +229,26 @@ export class Game {
     // Start loop
     this.clock.start();
     this._loop();
+  }
+
+  /**
+   * Spiral search for dry land around a requested spawn coordinate.
+   * Returns the input point unchanged when it is already well above water.
+   */
+  _findSpawn(x, z) {
+    const minH = CFG.world.waterLevel + 1.5;
+    if (this.terrainH.get(x, z) > minH) return { x, z };
+    const step = 8;
+    for (let r = step; r <= 192; r += step) {
+      const n = Math.max(8, Math.round((2 * Math.PI * r) / step));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        const sx = x + Math.cos(a) * r;
+        const sz = z + Math.sin(a) * r;
+        if (this.terrainH.get(sx, sz) > minH) return { x: sx, z: sz };
+      }
+    }
+    return { x, z }; // no shore in range - spawn wet rather than nowhere
   }
 
   _pauseGame() {
@@ -240,6 +294,20 @@ export class Game {
     // Water follows the player, animates its surface and takes care of
     // underwater fog (runs after the sky so it can override fog color)
     this.water.update(pPos, dt, this.camera, this.sky);
+
+    // Splash feedback on the water surface: hitting it hard while falling
+    // throws a big burst of ripple rings and droplets, leaping back out a
+    // small one. Purely shader/point based - see water-effects.js
+    const bodyPos = this.player.getPos();
+    const bodyVel = this.player.getVel();
+    const inWater = bodyPos.y < CFG.world.waterLevel - 0.2;
+    if (inWater && !this._wasInWater && bodyVel.y < -2.5) {
+      this.waterFx.splash(bodyPos.x, bodyPos.z, Math.min(1, -bodyVel.y / 10));
+    } else if (!inWater && this._wasInWater && bodyVel.y > 1.5) {
+      this.waterFx.splash(bodyPos.x, bodyPos.z, 0.4);
+    }
+    this._wasInWater = inWater;
+    this.waterFx.update(dt);
 
     // Chunks
     this.chunks.update(pPos.x, pPos.z, CFG.settings.renderDist);
@@ -288,6 +356,7 @@ export class Game {
       triangles: ri.render.triangles,
       biome: currentBiome,
       time: this.sky.clockString,
+      seed: CFG.world.seed,
       entityTypes: this.entities.countByType()
     });
 

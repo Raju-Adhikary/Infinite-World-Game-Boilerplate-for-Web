@@ -28,6 +28,8 @@ export class PlayerController {
     // Seconds until the ground check may report grounded again after a jump
     // (one Space press = one jump, even while hugging a slope face)
     this._jumpCooldown = 0;
+    // Cooldown for the water-surface leap impulse (see update)
+    this._leapCooldown = 0;
 
     // Vitals
     this.maxHealth = CFG.player.maxHealth;
@@ -212,7 +214,19 @@ export class PlayerController {
       const vy = vel.y + (targetVy - vel.y) * Math.min(1, 3.5 * dt);
       this.body.setLinvel({ x: dir.x * spd, y: vy, z: dir.z * spd }, true);
     } else {
-      this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
+      // Leaping out of the water: floating at the surface with jump held
+      // must become a real leap. A velocity blend cannot win here - the
+      // moment the body crosses the waterline it counts as airborne and the
+      // heavy fall gravity cancels the climb, so the player just bobbed
+      // below the surface forever. One explicit impulse throws them out.
+      const feetWet = p.y < CFG.world.waterLevel + 0.4;
+      if (feetWet && this.input.actions.jump
+        && vel.y < CFG.player.surfaceLeap && this._leapCooldown <= 0) {
+        this.body.setLinvel({ x: dir.x * spd, y: CFG.player.surfaceLeap, z: dir.z * spd }, true);
+        this._leapCooldown = 0.5;
+      } else {
+        this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
+      }
     }
 
     // Per-state gravity scale on the player body (world gravity stays at
@@ -233,6 +247,7 @@ export class PlayerController {
     // wall. Steep faces (normal.y < slopeNormalMin) are walls now - never
     // ground, never jumpable from.
     this._jumpCooldown = Math.max(0, this._jumpCooldown - dt);
+    this._leapCooldown = Math.max(0, this._leapCooldown - dt);
     const rayFrom = { x: p.x, y: p.y + 0.1, z: p.z };
     const rayTo = { x: p.x, y: p.y - 0.9, z: p.z };
     const hit = this.physics.raycastWithNormal(rayFrom, rayTo);
@@ -374,6 +389,7 @@ export class PlayerController {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setGravityScale(1, true);
     this._jumpCooldown = 0;
+    this._leapCooldown = 0;
     this.yaw = 0;
     this.pitch = 0.12;
     this._camSeated = false;

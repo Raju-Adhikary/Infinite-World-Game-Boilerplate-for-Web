@@ -12,11 +12,11 @@
 import * as THREE from 'three';
 import { CFG } from '../config/config.js';
 
-const PLANE_SIZE = 520;
-// 96 segments over 520m = ~5.4m cells. The old 48 segments (10.8m cells)
-// were too coarse for small ponds: a pond could fall entirely between
-// vertices and inherit the waves interpolated across it.
-const SEGMENTS = 96;
+// 720m across (radius 360 > fogFar 280) so in open ocean the plane edge is
+// always beyond full fog and the horizon reads as endless water
+const PLANE_SIZE = 720;
+// 120 segments over 720m = 6m cells - fine enough for pond-scale shore fades
+const SEGMENTS = 120;
 // Terrain depths are refreshed a few hundred vertices per frame in a
 // round-robin pass instead of all at once (~9.4k height samples per frame
 // would cost several milliseconds). Terrain never changes, so each vertex

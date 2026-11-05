@@ -13,15 +13,18 @@ glm-4.6_test/
     ├── config/
     │   └── config.js         # Centralized configuration and constants
     ├── core/                 # Core utilities and low-level systems
-    │   ├── utils.js          # Helper functions and utilities
+    │   ├── utils.js          # Helper functions, seeded random, coordinate hash
     │   ├── noise.js          # Perlin noise implementation
     │   ├── audio.js          # Audio manager
     │   ├── glb-cache.js      # GLB model loader and cache
     │   └── physics.js        # Physics world wrapper (Rapier)
     ├── world/                # World generation systems
     │   ├── biome-system.js   # Biome determination logic
-    │   ├── terrain-height.js # Procedural terrain height generation
-    │   └── chunk-manager.js  # Chunk loading/unloading and terrain generation
+    │   ├── terrain-height.js # Terrain height: continents, oceans, mountains
+    │   ├── chunk-manager.js  # Chunk loading/unloading and terrain generation
+    │   ├── water-system.js   # Global water surface with depth-aware waves
+    │   ├── water-effects.js  # Shader ripple rings and splash droplets
+    │   └── sky-system.js     # Day-night cycle: sun, moon, stars, clouds
     ├── player/               # Player-specific systems
     │   └── player-controller.js  # Player movement, camera, physics
     ├── entities/             # Entity and AI systems
@@ -69,6 +72,27 @@ glm-4.6_test/
 ### Running the Game
 1. Open `index.html` in a modern browser with ES6 module support
 2. The game will automatically boot and show the main menu
+
+### Seeds and World Coordinates
+
+World generation is fully deterministic: terrain, biomes, and every prop and
+bot placement derive from `CFG.world.seed` through a coordinate hash
+(`hashChunk(seed, chunkX, chunkZ)`), so the same seed always rebuilds the
+exact same world.
+
+- **URL parameters** pin the world for a session and override everything:
+  - `?seed=1234` - generate the world of seed 1234
+  - `?x=100&z=-50` - spawn near those world coordinates (the game spirals
+    outward to dry land if the point is in water)
+  - combine them: `?seed=1234&x=100&z=-50`
+- **Persistence**: the last seed is remembered in `localStorage` (`ge_seed`),
+  so reloading the page keeps the same world
+- **Sharing**: the active seed is shown on the start menu footer and in the
+  debug panel (F3) - share it together with the URL params
+
+Water surfaces react to the player with shader-based ripple rings and splash
+droplets on hard entries and on leaping out. The world also carries large
+ocean basins, taller mountain ranges with rock slopes and snow caps.
 
 ### Development Workflow
 
