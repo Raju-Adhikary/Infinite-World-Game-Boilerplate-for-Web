@@ -41,7 +41,22 @@ export const CFG = {
     moveSpeed: 5.5,
     // Hold Shift to sprint (multiplier on moveSpeed)
     sprintMult: 1.65,
-    jumpForce: 7,
+    jumpForce: 7.2,
+    // Jump feel: the player body's gravity is scaled per state (world gravity
+    // stays 9.81 for everything else). Rising slightly heavier and falling
+    // much heavier turns the old 1.4s floaty arc into a quick, weighty hop
+    // (~0.7s airtime) without touching global physics. While submerged,
+    // gravity is nearly cancelled - buoyancy comes from the paddle blend.
+    gravityRise: 1.9,
+    gravityFall: 2.7,
+    gravitySwim: 0.35,
+    // A surface is only ground if its normal is at least this vertical
+    // (normal.y >= 0.6 ~ slopes up to 53 degrees). Steeper faces are walls:
+    // no ground snap, no grounded flag, and therefore no mid-air jumping.
+    slopeNormalMin: 0.6,
+    // Seconds after a jump before the ground check can report grounded again,
+    // so one Space press is exactly one jump even when hugging a slope.
+    jumpCooldown: 0.3,
     cameraDist: 7,
     cameraHeight: 2.2,
     // Damping rate of the third-person camera follow (higher = tighter)

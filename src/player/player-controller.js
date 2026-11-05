@@ -25,6 +25,10 @@ export class PlayerController {
     this.avatar = null;
     this.spawnPos = new THREE.Vector3(0, CFG.player.spawnY, 0);
 
+    // Seconds until the ground check may report grounded again after a jump
+    // (one Space press = one jump, even while hugging a slope face)
+    this._jumpCooldown = 0;
+
     // Vitals
     this.maxHealth = CFG.player.maxHealth;
     this.health = this.maxHealth;
@@ -211,25 +215,56 @@ export class PlayerController {
       this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
     }
 
-    // Ground check via raycast. The ray starts slightly above the feet and
-    // physics.raycast uses solid=false, so the player's own capsule (which
-    // contains the ray origin) is ignored - a solid raycast from inside the
-    // body reported "grounded" every frame at toi=0. The downward-velocity
-    // guard keeps the ascending phase of a jump from re-triggering it.
+    // Per-state gravity scale on the player body (world gravity stays at
+    // 9.81 for everything else). Rising slightly heavier and falling much
+    // heavier makes the jump arc quick and weighty instead of floaty, and
+    // swimming nearly cancels gravity - buoyancy is the paddle blend above.
+    const gScale = submerged
+      ? CFG.player.gravitySwim
+      : (vel.y > 0.4 ? CFG.player.gravityRise : CFG.player.gravityFall);
+    this.body.setGravityScale(gScale, true);
+
+    // Ground check via raycast plus the surface normal. Three signals decide
+    // "grounded": walkable slope underfoot, feet close enough to it, and no
+    // jump in progress. The old vel.y guard was unreliable on terrain: run
+    // UPHILL and the contact solve injects upward velocity that read as
+    // airborne (jump pose while running), and on cliff faces the same
+    // contact damping re-enabled jumps mid-air, so tapping Space scaled any
+    // wall. Steep faces (normal.y < slopeNormalMin) are walls now - never
+    // ground, never jumpable from.
+    this._jumpCooldown = Math.max(0, this._jumpCooldown - dt);
     const rayFrom = { x: p.x, y: p.y + 0.1, z: p.z };
-    const rayTo = { x: p.x, y: p.y - 0.5, z: p.z };
-    const hit = this.physics.raycast(rayFrom, rayTo);
+    const rayTo = { x: p.x, y: p.y - 0.9, z: p.z };
+    const hit = this.physics.raycastWithNormal(rayFrom, rayTo);
     // Rapier 0.12 exposes the hit distance as `toi` (newer builds renamed it
-    // to `timeOfImpact`) - reading only the new name made grounded forever
-    // false, so jumping never worked.
-    const hitDist = hit ? (hit.timeOfImpact ?? hit.toi) : null;
-    this.grounded = hit !== null && hitDist < 0.45 && vel.y <= 0.1 && !submerged;
+    // to `timeOfImpact`).
+    const hitDist = hit ? hit.toi : null;
+    const walkable = hit !== null && hit.ny >= CFG.player.slopeNormalMin;
+    // Hysteresis: while grounded, grip the floor a little further out so
+    // running over crests and downhill slopes does not flicker airborne.
+    const maxDist = this.grounded ? 0.75 : 0.5;
+    const wasGrounded = this.grounded;
+    this.grounded = walkable && hitDist < maxDist && this._jumpCooldown <= 0 && !submerged;
+
+    // Stick to the ground when running downhill: without this the body
+    // leaves the surface every frame and glides down without the walk cycle
+    // (the "slide" report). Only engages right after grip was lost, never
+    // right after a jump, and only on walkable slopes - real falls (nothing
+    // or a wall below) are left alone.
+    if (wasGrounded && !this.grounded && this._jumpCooldown <= 0 && !submerged
+      && walkable && hitDist > 0.12 && hitDist < 0.75) {
+      this.body.setTranslation({ x: p.x, y: p.y + 0.1 - hitDist, z: p.z }, true);
+      const sv = this.body.linvel();
+      if (sv.y > 0) this.body.setLinvel({ x: sv.x, y: 0, z: sv.z }, true);
+      this.grounded = true;
+    }
 
     // Jump (keep current horizontal velocity; the stale pre-movement value
     // captured above would cancel the speed the player just accelerated to)
     if (this.input.actions.jump && this.grounded) {
       this.body.setLinvel({ x: dir.x * spd, y: CFG.player.jumpForce, z: dir.z * spd }, true);
       this.grounded = false;
+      this._jumpCooldown = CFG.player.jumpCooldown;
     }
 
     // Update camera
@@ -239,8 +274,12 @@ export class PlayerController {
     const lookTarget = new THREE.Vector3(p.x, p.y + cp.height * 0.75, p.z);
     this._updateAvatar(new THREE.Vector3(p.x, p.y, p.z), this.yaw);
 
-    // Drive the walk / idle / jump poses from the real horizontal velocity
-    this.avatarAnim?.update(dt, Math.hypot(vel.x, vel.z), !this.grounded);
+    // Drive the walk / idle / jump poses from the real horizontal velocity.
+    // The jump pose only shows when genuinely airborne - a real jump or fall
+    // (fast vertical speed) or fully off the ground. Riding along terrain the
+    // ray still sees, like steep descents, keeps the locomotion cycle.
+    const airPose = !this.grounded && (Math.abs(vel.y) > 2.2 || hitDist === null || hitDist > 0.9);
+    this.avatarAnim?.update(dt, Math.hypot(vel.x, vel.z), airPose);
 
     const eyePos = new THREE.Vector3(p.x, p.y + cp.height * 0.9, p.z);
     const forward = new THREE.Vector3(
@@ -333,6 +372,8 @@ export class PlayerController {
     this.dead = false;
     this.body.setTranslation({ x: this.spawnPos.x, y: this.spawnPos.y, z: this.spawnPos.z }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.body.setGravityScale(1, true);
+    this._jumpCooldown = 0;
     this.yaw = 0;
     this.pitch = 0.12;
     this._camSeated = false;

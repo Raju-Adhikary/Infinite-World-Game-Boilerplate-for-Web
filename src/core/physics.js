@@ -79,6 +79,27 @@ export class PhysicsWorld {
     return this.world.castRay(new Rapier.Ray(from, dir), dist, false, undefined, filterGroups);
   }
 
+  /**
+   * Like raycast(), but also returns the surface normal at the hit point:
+   * { toi, nx, ny, nz } or null. The ground check needs the normal to tell
+   * walkable slopes from wall faces (Rapier 0.12's plain castRay hit carries
+   * no normal, so this goes through castRayAndGetNormal).
+   */
+  raycastWithNormal(from, to, filterGroups = undefined) {
+    if (!this.world) return null;
+
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist <= 0) return null;
+
+    const dir = { x: dx / dist, y: dy / dist, z: dz / dist };
+    const hit = this.world.castRayAndGetNormal(new Rapier.Ray(from, dir), dist, false, undefined, filterGroups);
+    if (!hit) return null;
+    return { toi: hit.toi, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z };
+  }
+
   getBodyPos(b) {
     const p = b.translation();
     return new THREE.Vector3(p.x, p.y, p.z);
