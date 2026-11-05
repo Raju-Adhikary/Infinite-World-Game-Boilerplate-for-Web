@@ -139,6 +139,221 @@ canvas {
   letter-spacing: 2px
 }
 
+/* --- Start screen: cinematic left-anchored menu over the live world --- */
+
+#start-screen {
+  justify-content: flex-start;
+  background: transparent;
+  backdrop-filter: none
+}
+
+.start-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(6, 8, 14, .93) 0%, rgba(6, 8, 14, .8) 32%, rgba(6, 8, 14, .3) 66%, rgba(6, 8, 14, 0) 100%),
+    linear-gradient(0deg, rgba(6, 8, 14, .5) 0%, rgba(6, 8, 14, 0) 32%)
+}
+
+#start-screen .start-content {
+  position: relative;
+  text-align: left;
+  max-width: none;
+  width: auto;
+  padding: 0 9vw;
+  background: none;
+  border: none;
+  border-radius: 0
+}
+
+#start-screen .start-content>* {
+  animation: rise .55s ease-out both
+}
+
+#start-screen .start-content>*:nth-child(2) {
+  animation-delay: .07s
+}
+
+#start-screen .start-content>*:nth-child(3) {
+  animation-delay: .14s
+}
+
+#start-screen .start-content>*:nth-child(4) {
+  animation-delay: .2s
+}
+
+#start-screen .start-content>*:nth-child(5) {
+  animation-delay: .27s
+}
+
+#start-screen .start-content>*:nth-child(6) {
+  animation-delay: .34s
+}
+
+#start-screen .start-content>*:nth-child(7) {
+  animation-delay: .4s
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px)
+  }
+
+  to {
+    opacity: 1;
+    transform: none
+  }
+}
+
+.start-kicker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--fm);
+  font-size: 12px;
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 20px
+}
+
+.start-kicker::before {
+  content: '';
+  width: 36px;
+  height: 2px;
+  background: var(--accent);
+  flex-shrink: 0
+}
+
+#start-screen .game-title {
+  font-size: clamp(44px, 8.5vw, 92px);
+  letter-spacing: 10px;
+  margin-bottom: 12px;
+  line-height: 1.05;
+  text-shadow: none;
+  background: linear-gradient(100deg, var(--accent) 25%, #ffe9b0 42%, var(--accent) 60%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: titleSweep 7s ease-in-out infinite, rise .55s ease-out both
+}
+
+/* Animations restart every time the screen is shown: while hidden they are
+   switched off, and removing .hidden re-applies them fresh. */
+#start-screen.hidden .start-content>*,
+#start-screen.hidden .game-title {
+  animation: none
+}
+
+@keyframes titleSweep {
+
+  0%,
+  100% {
+    background-position: 88% 0
+  }
+
+  50% {
+    background-position: 12% 0
+  }
+}
+
+#start-screen .game-subtitle {
+  margin-bottom: 26px
+}
+
+.start-rule {
+  width: 84px;
+  height: 3px;
+  margin-bottom: 32px;
+  background: linear-gradient(90deg, var(--accent), rgba(232, 160, 32, 0))
+}
+
+#start-screen .start-buttons {
+  align-items: flex-start;
+  gap: 14px
+}
+
+#start-screen .btn {
+  min-width: 280px;
+  text-align: left;
+  padding: 15px 26px;
+  border: none;
+  border-left: 3px solid var(--border);
+  border-radius: 3px;
+  background: rgba(10, 12, 20, .58);
+  backdrop-filter: blur(4px);
+  color: var(--text);
+  transition: transform .18s, border-color .18s, background .18s, color .18s
+}
+
+#start-screen .btn-primary {
+  border-left-color: var(--accent);
+  color: var(--accent-b)
+}
+
+#start-screen .btn:hover,
+#start-screen .btn:focus-visible {
+  transform: translateX(8px);
+  border-left-color: var(--accent-b);
+  background: rgba(22, 26, 40, .78);
+  color: var(--accent-b);
+  box-shadow: none;
+  outline: none
+}
+
+.start-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin-top: 36px;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--dim)
+}
+
+.start-hints b {
+  font-family: var(--fm);
+  font-weight: 700;
+  color: var(--text);
+  margin-right: 7px
+}
+
+#start-screen .version {
+  margin-top: 26px
+}
+
+@media(max-width:640px) {
+  #start-screen {
+    justify-content: center
+  }
+
+  #start-screen .start-content {
+    text-align: center;
+    padding: 0 18px
+  }
+
+  .start-kicker {
+    justify-content: center
+  }
+
+  #start-screen .start-buttons {
+    align-items: center
+  }
+
+  #start-screen .btn {
+    min-width: 210px;
+    text-align: center
+  }
+
+  .start-hints {
+    justify-content: center
+  }
+}
+
 .settings-content {
   max-width: 500px;
   max-height: 80vh;
