@@ -258,6 +258,11 @@ function _moveBot(bot, target, speed, dt, terrainH, physics) {
   // Follow the rendered terrain surface (see TerrainHeight.gridHeight) so mobs
   // do not float above or clip into slopes while walking.
   const newY = terrainH.gridHeight(newX, newZ);
+  // Mobs cannot swim: refuse to step below the water line, otherwise chasing
+  // or wandering walked them down the beach slope and across the sea floor
+  // (which read as mobs walking on water). They stop at the water's edge and
+  // let their state timers move them on.
+  if (newY < CFG.world.waterLevel + 0.1) return;
 
   bot.mesh.position.set(
     newX - bot.mesh.parent.position.x,

@@ -213,7 +213,14 @@ export class UIManager {
     }
   }
   showMobileControls() { this.mobileCtrl.classList.remove('hidden'); }
-  toggleDebug() { this.debugEl.classList.toggle('hidden'); }
+  // F3 flips the same setting as the SHOW FPS chip: updateDebug() only fills
+  // the panel while showFps is on, so merely toggling the hidden class showed
+  // an empty debug panel.
+  toggleDebug() {
+    CFG.settings.showFps = !CFG.settings.showFps;
+    this.debugEl.classList.toggle('hidden', !CFG.settings.showFps);
+    document.getElementById('s-show-fps')?.classList.toggle('on', CFG.settings.showFps);
+  }
 
   // --- HUD: health, damage feedback, death ---
 
