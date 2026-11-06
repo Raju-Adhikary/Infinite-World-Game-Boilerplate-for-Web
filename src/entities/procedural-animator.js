@@ -41,7 +41,7 @@ export function createProceduralAnimator(root) {
       anim.state = action;
       return true;
     },
-    update(dt, speed = 0, airborne = false) {
+    update(dt, speed = 0, airborne = false, swim = false) {
       anim.t += dt;
       if (anim.attackT > 0) anim.attackT = Math.max(0, anim.attackT - dt);
 
@@ -51,13 +51,13 @@ export function createProceduralAnimator(root) {
       if (rig.kind === 'quadruped') {
         _updateQuadruped(anim, rig, dt, moving, speedFactor);
       } else {
-        _updateHumanoid(anim, rig, dt, moving, speedFactor, airborne);
+        _updateHumanoid(anim, rig, dt, moving, speedFactor, airborne, swim);
       }
     },
   };
 }
 
-function _updateHumanoid(anim, rig, dt, moving, speedFactor, airborne) {
+function _updateHumanoid(anim, rig, dt, moving, speedFactor, airborne, swim) {
   const { inner, head, armL, armR, legL, legR } = rig;
 
   // Attack lunge overrides locomotion
@@ -70,6 +70,22 @@ function _updateHumanoid(anim, rig, dt, moving, speedFactor, airborne) {
     _ease(legL, 'x', 0, dt);
     _ease(legR, 'x', 0, dt);
     _easeY(inner, 0, dt);
+    return;
+  }
+
+  if (swim) {
+    // Surface crawl: body pitched forward into the water, alternating arm
+    // strokes and a flutter kick. Everything is damped, so leaving the water
+    // blends straight back into the locomotion poses.
+    anim.phase += dt * (2.4 + speedFactor * 3.2);
+    const swing = Math.sin(anim.phase);
+    _ease(inner, 'x', 1.28, dt, 5);
+    _easeY(inner, 0, dt);
+    _ease(armL, 'x', -1.5 + swing * 0.85, dt, 7);
+    _ease(armR, 'x', -1.5 - swing * 0.85, dt, 7);
+    _ease(legL, 'x', swing * 0.4, dt, 7);
+    _ease(legR, 'x', -swing * 0.4, dt, 7);
+    _ease(head, 'y', 0, dt);
     return;
   }
 

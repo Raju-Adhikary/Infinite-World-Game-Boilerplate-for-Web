@@ -4,9 +4,12 @@
  * - expanding ripple rings drawn by a fragment shader on a flat quad that
  *   hovers just above the surface (radial ring pattern, fades as it expands)
  * - a burst of droplet points tossed up with fake gravity and faded out
+ * - small trailing wake rings spawned at an entity's CURRENT position every
+ *   few tenths of a second, so the disturbance FOLLOWS whatever moves along
+ *   the surface instead of staying where it first touched
  *
- * Triggers: the player hitting the surface while falling (big splash) and
- * leaping back out of it (smaller splash).
+ * Triggers: the player hitting the surface while falling (big splash),
+ * leaping back out of it (smaller splash), and swimming/wading (wake).
  */
 import * as THREE from 'three';
 import { CFG } from '../config/config.js';
@@ -61,8 +64,10 @@ export class WaterEffects {
   /**
    * Spawn a splash at a world XZ position on the water surface.
    * power 0..1 scales ring size, brightness and droplet count.
+   * surfaceY is the wave height under the impact (from WaterSystem.heightAt)
+   * so the rings ride the moving surface instead of a fixed plane.
    */
-  splash(x, z, power = 1) {
+  splash(x, z, power = 1, surfaceY = null) {
     power = Math.max(0.15, Math.min(1, power));
 
     const mat = new THREE.ShaderMaterial({
@@ -80,15 +85,44 @@ export class WaterEffects {
     const mesh = new THREE.Mesh(this._geo, mat);
     const size = 3 + 9 * power;
     mesh.scale.setScalar(size);
-    mesh.position.set(x, CFG.world.waterLevel + 0.12, z);
+    mesh.position.set(x, (surfaceY ?? CFG.world.waterLevel) + 0.12, z);
     mesh.renderOrder = 5;
     this.scene.add(mesh);
-    this._ripples.push({ mesh, t: 0 });
+    this._ripples.push({ mesh, t: 0, size, wake: false });
 
-    this._spawnDrops(x, z, power);
+    this._spawnDrops(x, z, power, surfaceY);
   }
 
-  _spawnDrops(x, z, power) {
+  /**
+   * A small trailing disturbance ring - no droplets, slower expansion.
+   * Called repeatedly at the entity's live position so the wake follows it.
+   */
+  wake(x, z, power = 0.3, surfaceY = null) {
+    power = Math.max(0.08, Math.min(0.5, power));
+
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uT: { value: 0 },
+        uPower: { value: power },
+        uColor: { value: new THREE.Color(0xcfeaff) },
+      },
+    });
+    const mesh = new THREE.Mesh(this._geo, mat);
+    const size = 1.5 + 3.5 * power;
+    mesh.scale.setScalar(size);
+    mesh.position.set(x, (surfaceY ?? CFG.world.waterLevel) + 0.1, z);
+    mesh.renderOrder = 5;
+    this.scene.add(mesh);
+    this._ripples.push({ mesh, t: 0, size, wake: true });
+  }
+
+  _spawnDrops(x, z, power, surfaceY = null) {
+    const baseY = (surfaceY ?? CFG.world.waterLevel) + 0.1;
     const n = Math.round(10 + 26 * power);
     const pos = new Float32Array(n * 3);
     const vel = new Float32Array(n * 3);
@@ -96,7 +130,7 @@ export class WaterEffects {
       const a = Math.random() * Math.PI * 2;
       const sp = (0.8 + Math.random() * 1.6) * (0.5 + power);
       pos[i * 3] = x + Math.cos(a) * 0.25;
-      pos[i * 3 + 1] = CFG.world.waterLevel + 0.1;
+      pos[i * 3 + 1] = baseY;
       pos[i * 3 + 2] = z + Math.sin(a) * 0.25;
       vel[i * 3] = Math.cos(a) * sp;
       vel[i * 3 + 1] = 2.2 + Math.random() * 2.6 * (0.5 + power);
@@ -129,8 +163,8 @@ export class WaterEffects {
         continue;
       }
       r.mesh.material.uniforms.uT.value = r.t;
-      const s = (3 + 9 * r.mesh.material.uniforms.uPower.value) * (1 + r.t * 0.55);
-      r.mesh.scale.setScalar(s);
+      const growth = r.wake ? 0.35 : 0.55;
+      r.mesh.scale.setScalar(r.size * (1 + r.t * growth));
     }
 
     // Droplets: fake gravity ballistics, fade and drop the whole burst

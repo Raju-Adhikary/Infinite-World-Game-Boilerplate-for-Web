@@ -29,6 +29,9 @@ export class Game {
     this.frames = 0;
     this.fpsTime = 0;
     this.fps = 0;
+    // Water feedback timers (splash edge detection + trailing wake period)
+    this._wasInWater = false;
+    this._wakeT = 0;
   }
 
   async boot() {
@@ -117,6 +120,15 @@ export class Game {
     this.chunks = new ChunkManager(this.scene, this.physics, this.entities, this.glb, this.terrainH, this.biome);
     this.player = new PlayerController(this.camera, this.physics, this.input, this.terrainH, this.scene);
 
+    // Resolve the spawn point ONCE, before the menu renders: the requested
+    // coordinates when they are on dry land, otherwise the nearest shore from
+    // a spiral search. The menu streams the world around THIS point so the
+    // backdrop matches what PLAY actually spawns into (it used to stream
+    // around the origin while the seed/spawn mechanism could place the player
+    // hundreds of meters away).
+    this._spawnPoint = this._findSpawn(CFG.world.spawnX, CFG.world.spawnZ);
+    this._spawnH = this.terrainH.get(this._spawnPoint.x, this._spawnPoint.z);
+
     // Touch setup
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
       this.input.initTouch();
@@ -185,17 +197,20 @@ export class Game {
 
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const t = performance.now() * 0.0002;
-    this.camera.position.set(Math.sin(t) * 40, 25, Math.cos(t) * 40);
-    this.camera.lookAt(0, 5, 0);
+    // Orbit the menu camera around the resolved spawn point, at a height
+    // that clears whatever terrain the seed put there
+    const sp = this._spawnPoint;
+    const cy = Math.max(25, this._spawnH + 14);
+    this.camera.position.set(sp.x + Math.sin(t) * 40, cy, sp.z + Math.cos(t) * 40);
+    this.camera.lookAt(sp.x, this._spawnH + 4, sp.z);
     // Keep the day cycle ticking slowly behind the menu
     this.sky.update(this.camera.position, dt * 0.5);
     this.water.update(this.camera.position, dt * 0.5, this.camera, this.sky);
     this.waterFx.update(dt * 0.5);
-    // Stream the world around the origin behind the start screen so the menu
-    // looks at real terrain instead of an empty sky. Capped at 3 chunks of
-    // radius: the orbiting camera only sees that far, and PLAY spawns at
-    // (0, 0) anyway, so the ring is reused by the actual game.
-    this.chunks.update(0, 0, Math.min(CFG.settings.renderDist, 3));
+    // Stream the world around the spawn point behind the start screen so the
+    // menu looks at the terrain PLAY will drop the player into. Capped at 3
+    // chunks of radius: the orbiting camera only sees that far.
+    this.chunks.update(sp.x, sp.z, Math.min(CFG.settings.renderDist, 3));
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(() => this._renderIdle());
   }
@@ -211,10 +226,9 @@ export class Game {
     this.ui.showHud();
     this.input.reset();
 
-    // Find a good spawn point: the requested coordinates when they are on
-    // dry land, otherwise the nearest shore found by a spiral search - so
-    // every seed is playable even when its origin sits mid-ocean
-    const sp = this._findSpawn(CFG.world.spawnX, CFG.world.spawnZ);
+    // Spawn at the point resolved in boot() (dry land, or the nearest shore
+    // when the requested coordinates sit in water)
+    const sp = this._spawnPoint;
     this.player.spawnPos.set(sp.x, this.terrainH.get(sp.x, sp.z) + CFG.player.spawnY, sp.z);
     this.player.init();
 
@@ -224,7 +238,7 @@ export class Game {
     this.player.onRespawn = () => this.ui.hideDeath();
 
     // Pre-generate some chunks around spawn
-    this.chunks.update(0, 0, CFG.settings.renderDist);
+    this.chunks.update(sp.x, sp.z, CFG.settings.renderDist);
 
     // Start loop
     this.clock.start();
@@ -297,16 +311,37 @@ export class Game {
 
     // Splash feedback on the water surface: hitting it hard while falling
     // throws a big burst of ripple rings and droplets, leaping back out a
-    // small one. Purely shader/point based - see water-effects.js
+    // small one. Rings sit at the CURRENT wave height so crests never bury
+    // them. Purely shader/point based - see water-effects.js
     const bodyPos = this.player.getPos();
     const bodyVel = this.player.getVel();
     const inWater = bodyPos.y < CFG.world.waterLevel - 0.2;
     if (inWater && !this._wasInWater && bodyVel.y < -2.5) {
-      this.waterFx.splash(bodyPos.x, bodyPos.z, Math.min(1, -bodyVel.y / 10));
+      this.waterFx.splash(bodyPos.x, bodyPos.z, Math.min(1, -bodyVel.y / 10),
+        this.water.heightAt(bodyPos.x, bodyPos.z));
     } else if (!inWater && this._wasInWater && bodyVel.y > 1.5) {
-      this.waterFx.splash(bodyPos.x, bodyPos.z, 0.4);
+      this.waterFx.splash(bodyPos.x, bodyPos.z, 0.4,
+        this.water.heightAt(bodyPos.x, bodyPos.z));
     }
     this._wasInWater = inWater;
+
+    // Trailing wake: while the player is in the water, small rings spawn at
+    // their LIVE position every beat - the surface disturbance follows the
+    // swimmer instead of staying where they first touched. Moving throws a
+    // stronger wake; floating still ripples gently now and then.
+    this._wakeT -= dt;
+    if (bodyPos.y < CFG.world.waterLevel + 0.15 && this._wakeT <= 0) {
+      const wsp = Math.hypot(bodyVel.x, bodyVel.z);
+      if (wsp > 0.6) {
+        this.waterFx.wake(bodyPos.x, bodyPos.z, Math.min(0.5, 0.12 + wsp * 0.05),
+          this.water.heightAt(bodyPos.x, bodyPos.z));
+        this._wakeT = 0.28;
+      } else {
+        this.waterFx.wake(bodyPos.x, bodyPos.z, 0.1,
+          this.water.heightAt(bodyPos.x, bodyPos.z));
+        this._wakeT = 1.2;
+      }
+    }
     this.waterFx.update(dt);
 
     // Chunks

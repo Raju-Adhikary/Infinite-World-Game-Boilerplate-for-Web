@@ -127,7 +127,13 @@ export class PlayerController {
       .setCollisionGroups(GROUP_PROP);
     const bodyDesc = Rapier.RigidBodyDesc.dynamic()
       .setTranslation(this.spawnPos.x, this.spawnPos.y, this.spawnPos.z)
-      .lockRotations();
+      .lockRotations()
+      // Continuous collision detection: with the heavier fall gravity a
+      // 30m spawn drop (or a leap off an 80m mountain) reaches ~40-70 m/s,
+      // and a discrete-step capsule at that speed sweeps straight through
+      // thin trimesh faces - players fell through peaks and dropped into
+      // the void. CCD sweeps the capsule between steps instead.
+      .setCcdEnabled(true);
     const { body, id } = this.physics.createBody(bodyDesc, colDesc);
 
     this.body = body;
@@ -200,40 +206,52 @@ export class PlayerController {
 
     const p = this.body.translation();
 
-    // Wading and swimming: below the water line gravity is replaced by a
-    // buoyant blend toward paddle-up (hold Space) or a slow sink, and
-    // horizontal movement slows down. The player can wade across shallows
-    // and dive to the lakebed.
-    const submerged = p.y < CFG.world.waterLevel - 0.2;
+    // Wading vs swimming, decided by the actual WATER DEPTH at the player's
+    // position (terrain below the water line), not just "feet under the
+    // line". The old single line-crossing test was the walk-on-water bug:
+    // just above the line the body got full walk speed plus the surface
+    // leap, just below it buoyancy, so the player surfed the waterline at
+    // running speed and could skim across the entire ocean. Now water
+    // shallower than swimDepth is waded on foot (grounded, can jump) and
+    // deeper water is properly swum at the float line.
+    const waterLevel = CFG.world.waterLevel;
+    const waterDepth = waterLevel - this.terrainH.get(p.x, p.z);
+    const swimming = p.y < waterLevel - 0.12 && waterDepth > CFG.player.swimDepth;
+    const wading = !swimming && p.y < waterLevel + 0.4;
     const sprinting = !!this.input.actions.sprint && dir.lengthSq() > 0;
     const spd = CFG.player.moveSpeed
-      * (submerged ? 0.55 : 1)
+      * (swimming ? CFG.player.swimSpeed : wading ? CFG.player.wadeSpeed : 1)
       * (sprinting ? CFG.player.sprintMult : 1);
-    if (submerged) {
-      const targetVy = this.input.actions.jump ? CFG.player.swimUp : -0.8;
-      const vy = vel.y + (targetVy - vel.y) * Math.min(1, 3.5 * dt);
-      this.body.setLinvel({ x: dir.x * spd, y: vy, z: dir.z * spd }, true);
-    } else {
-      // Leaping out of the water: floating at the surface with jump held
-      // must become a real leap. A velocity blend cannot win here - the
-      // moment the body crosses the waterline it counts as airborne and the
-      // heavy fall gravity cancels the climb, so the player just bobbed
-      // below the surface forever. One explicit impulse throws them out.
-      const feetWet = p.y < CFG.world.waterLevel + 0.4;
-      if (feetWet && this.input.actions.jump
+
+    if (swimming) {
+      // Shore within reach: hold Space to leap out of the water onto the
+      // bank. Gated by depth so mid-ocean Space is a paddle, not a chain of
+      // surface hops that skim-walked across open water.
+      if (this.input.actions.jump && waterDepth < 2.4
         && vel.y < CFG.player.surfaceLeap && this._leapCooldown <= 0) {
         this.body.setLinvel({ x: dir.x * spd, y: CFG.player.surfaceLeap, z: dir.z * spd }, true);
         this._leapCooldown = 0.5;
       } else {
-        this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
+        // Float line: idle swimming settles with the feet ~1m under the
+        // surface and the head above water. Space paddles up; a fast dive
+        // kills its speed quickly, like real water drag.
+        const floatY = waterLevel - CFG.player.floatDepth;
+        const targetVy = this.input.actions.jump ? CFG.player.swimUp
+          : _clamp((floatY - p.y) * 2.2, -1.0, 1.6);
+        const rate = 4.5 + Math.max(0, -vel.y) * 0.8;
+        const vy = vel.y + (targetVy - vel.y) * Math.min(1, rate * dt);
+        this.body.setLinvel({ x: dir.x * spd, y: vy, z: dir.z * spd }, true);
       }
+    } else {
+      this.body.setLinvel({ x: dir.x * spd, y: vel.y, z: dir.z * spd }, true);
     }
 
     // Per-state gravity scale on the player body (world gravity stays at
     // 9.81 for everything else). Rising slightly heavier and falling much
     // heavier makes the jump arc quick and weighty instead of floaty, and
     // swimming nearly cancels gravity - buoyancy is the paddle blend above.
-    const gScale = submerged
+    // Wading keeps normal gravity: the feet are on the bed.
+    const gScale = swimming
       ? CFG.player.gravitySwim
       : (vel.y > 0.4 ? CFG.player.gravityRise : CFG.player.gravityFall);
     this.body.setGravityScale(gScale, true);
@@ -259,14 +277,16 @@ export class PlayerController {
     // running over crests and downhill slopes does not flicker airborne.
     const maxDist = this.grounded ? 0.75 : 0.5;
     const wasGrounded = this.grounded;
-    this.grounded = walkable && hitDist < maxDist && this._jumpCooldown <= 0 && !submerged;
+    // Wading in shin-deep water still counts as grounded (walking on the
+    // bed); only real swimming lifts the feet off the ground.
+    this.grounded = walkable && hitDist < maxDist && this._jumpCooldown <= 0 && !swimming;
 
     // Stick to the ground when running downhill: without this the body
     // leaves the surface every frame and glides down without the walk cycle
     // (the "slide" report). Only engages right after grip was lost, never
     // right after a jump, and only on walkable slopes - real falls (nothing
     // or a wall below) are left alone.
-    if (wasGrounded && !this.grounded && this._jumpCooldown <= 0 && !submerged
+    if (wasGrounded && !this.grounded && this._jumpCooldown <= 0 && !swimming
       && walkable && hitDist > 0.12 && hitDist < 0.75) {
       this.body.setTranslation({ x: p.x, y: p.y + 0.1 - hitDist, z: p.z }, true);
       const sv = this.body.linvel();
@@ -289,12 +309,14 @@ export class PlayerController {
     const lookTarget = new THREE.Vector3(p.x, p.y + cp.height * 0.75, p.z);
     this._updateAvatar(new THREE.Vector3(p.x, p.y, p.z), this.yaw);
 
-    // Drive the walk / idle / jump poses from the real horizontal velocity.
-    // The jump pose only shows when genuinely airborne - a real jump or fall
+    // Drive the walk / idle / jump / swim poses from the real velocity. The
+    // jump pose only shows when genuinely airborne - a real jump or fall
     // (fast vertical speed) or fully off the ground. Riding along terrain the
-    // ray still sees, like steep descents, keeps the locomotion cycle.
-    const airPose = !this.grounded && (Math.abs(vel.y) > 2.2 || hitDist === null || hitDist > 0.9);
-    this.avatarAnim?.update(dt, Math.hypot(vel.x, vel.z), airPose);
+    // ray still sees, like steep descents, keeps the locomotion cycle, and
+    // swimming always shows the surface crawl.
+    const airPose = swimming
+      || (!this.grounded && (Math.abs(vel.y) > 2.2 || hitDist === null || hitDist > 0.9));
+    this.avatarAnim?.update(dt, Math.hypot(vel.x, vel.z), airPose, swimming);
 
     const eyePos = new THREE.Vector3(p.x, p.y + cp.height * 0.9, p.z);
     const forward = new THREE.Vector3(
