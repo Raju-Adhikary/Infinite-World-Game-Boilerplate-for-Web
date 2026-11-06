@@ -9,11 +9,20 @@ export const CFG = {
   world: {
     chunkSize: 64,
     chunkSegments: 28,
-    // Taller hills: the height field also gets a quadratic highland boost in
-    // terrain-height.js, so peaks reach roughly twice the old relief
+    // Highlands. heightScale carries the rolling hills; a separate regional
+    // mask (see terrain-height.js) multiplies them up to mountainBoost inside
+    // mountain-range cores, and a soft saturation curve caps the tallest
+    // spires near mountainCapKnee + mountainCapSpan (~86m) so peaks reach the
+    // cloud deck instead of growing without bound.
     heightScale: 26,
-    heightFreq: 0.008,
+    heightFreq: 0.007,
     heightOctaves: 5,
+    mountainFreq: 0.0035,
+    mountainLo: 0.58,
+    mountainHi: 0.78,
+    mountainBoost: 3.8,
+    mountainCapKnee: 58,
+    mountainCapSpan: 28,
     // Continental mask (very low frequency noise) that separates land from
     // ocean. Where it dips below oceanLevel the terrain sinks into a sea
     // basin; coastWidth is the smooth beach-to-shallow transition band.
@@ -21,9 +30,10 @@ export const CFG = {
     oceanLevel: 0.36,
     coastWidth: 0.14,
     // Mountain dressing on the terrain colors: rock above rockLine,
-    // snow caps above snowLine (absolute world Y)
-    rockLine: 15,
-    snowLine: 20,
+    // snow caps above snowLine (absolute world Y). With range peaks
+    // topping out around 80+ this leaves a thick ice band on the summits.
+    rockLine: 30,
+    snowLine: 58,
     loadRadius: 3,
     unloadRadius: 5,
     chunksPerFrame: 2,
@@ -82,6 +92,16 @@ export const CFG = {
     spawnY: 30,
     // Vertical speed while paddling up in water (see player-controller)
     swimUp: 2.6,
+    // Water state split: water deeper than swimDepth is swum (buoyancy, swim
+    // speed, float line), shallower water is waded on foot. The single
+    // "feet below the line" test that preceded this let players surf the
+    // waterline at full run speed - the walk-on-water bug.
+    swimDepth: 1.25,
+    // Idle swimming settles with the feet this far under the surface, head up
+    floatDepth: 1.05,
+    // Speed multipliers while wading / swimming
+    wadeSpeed: 0.75,
+    swimSpeed: 0.55,
     // Vertical speed of the leap when a held jump reaches the water surface:
     // paddle speed alone cannot beat the fall gravity, so surfacing would
     // otherwise end in an endless bob right below the waterline

@@ -171,9 +171,12 @@ export class SkySystem {
 
       const angle = (i / cloudCount) * Math.PI * 2;
       const distance = 100 + Math.random() * 50;
+      // Cloud deck sits at 88-114m so the tallest mountain ranges (capped
+      // around 85m) climb right into it instead of standing under a ceiling
+      // that hangs lower than the summits
       cloud.position.set(
         Math.cos(angle) * distance,
-        60 + Math.random() * 20,
+        88 + Math.random() * 26,
         Math.sin(angle) * distance
       );
       this.cloudGroup.add(cloud);

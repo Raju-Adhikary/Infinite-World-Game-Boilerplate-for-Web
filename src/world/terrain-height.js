@@ -2,11 +2,15 @@
  * Terrain Height Generator
  * Procedurally generates terrain heights using noise
  *
- * The field has two layers:
+ * The field has three layers:
  * - a low-frequency CONTINENTAL mask that decides land vs ocean, giving the
  *   world large connected sea basins with smooth beaches between them
  * - the classic FBM height field, boosted quadratically in the upper range
  *   so highlands rise into real mountains instead of gentle hills
+ * - a regional MOUNTAIN mask on its own noise stream: inside range cores the
+ *   highlands are multiplied up to (1 + mountainBoost), and a soft
+ *   saturation curve caps the tallest spires near capKnee + capSpan, so the
+ *   world gets dramatic 70-85m ice-capped ranges while plains stay gentle
  */
 import { Noise } from '../core/noise.js';
 import { CFG } from '../config/config.js';
@@ -18,6 +22,9 @@ export class TerrainHeight {
     // Independent stream for the continental mask so land/ocean layout can be
     // tuned without disturbing the hill shapes
     this.cont = new Noise(seed + 4242);
+    // Independent stream for the mountain-range mask (deterministic per seed,
+    // like every other stream)
+    this.mtn = new Noise(seed + 911);
     this.cfg = CFG.world;
   }
 
@@ -44,10 +51,30 @@ export class TerrainHeight {
       2.0,
       0.48
     );
-    const landH = base * c.heightScale * (0.55 + 1.35 * base);
+    let landH = base * c.heightScale * (0.55 + 1.35 * base);
 
-    // Sea floor: sinks with distance from the coast, well below the surface
-    const seaH = c.waterLevel - 4 - 20 * (1 - t);
+    // Regional mountain ranges: a slow second noise decides WHERE the
+    // highlands are amplified. The smoothstep band keeps most of the world
+    // untouched, so plains and hills keep their old character while range
+    // cores climb toward the cloud deck.
+    const m = this.mtn.fbm(wx * c.mountainFreq, wz * c.mountainFreq, 3, 2.0, 0.5);
+    let mt = _clamp((m - c.mountainLo) / (c.mountainHi - c.mountainLo), 0, 1);
+    mt = mt * mt * (3 - 2 * mt);
+    landH *= 1 + c.mountainBoost * mt;
+
+    // Soft saturation cap: exponentially flattening approach to
+    // capKnee + capSpan (~86m). Hard caps would mesa-off the peaks into
+    // flat plateaus; this keeps every summit pointed.
+    if (landH > c.mountainCapKnee) {
+      const over = landH - c.mountainCapKnee;
+      landH = c.mountainCapKnee + c.mountainCapSpan * (1 - Math.exp(-over / c.mountainCapSpan));
+    }
+
+    // Sea floor: sinks with distance from the coast, well below the surface,
+    // with a few meters of FBM relief so the ocean bed is not a dead flat
+    // plane when diving (seaH stays under the water line: at t=1 the floor
+    // tops out at waterLevel - 4 +- 2).
+    const seaH = c.waterLevel - 4 - 20 * (1 - t) + (base - 0.5) * 4;
 
     return _lerp(landH, seaH, ocean);
   }
