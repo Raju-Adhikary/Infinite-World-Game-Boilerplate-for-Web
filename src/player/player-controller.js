@@ -357,8 +357,11 @@ export class PlayerController {
         }
       }
 
-      // Never let the camera dip below the ground surface
-      const groundY = this.terrainH.get(desired.x, desired.z) + 0.3;
+      // Never let the camera dip below the ground surface. gridHeight is the
+      // RENDERED surface (bilinear over the lattice the mesh samples), the
+      // analytic field can sit up to ~0.5m away from it on curved slopes -
+      // the clamp must match what the player actually sees.
+      const groundY = this.terrainH.gridHeight(desired.x, desired.z) + 0.3;
       if (desired.y < groundY) desired.y = groundY;
 
       // Damped follow: ease toward the desired pose instead of snapping each

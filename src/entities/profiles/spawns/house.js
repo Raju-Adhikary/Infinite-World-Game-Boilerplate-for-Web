@@ -3,6 +3,23 @@ export const house = {
   density: 0.015,
   minDist: 20,
   scale: [0.9, 1.1],
+  /**
+   * Placement rules (handled by ChunkManager). Houses declare the ground pad
+   * they need: sites are rejected when any footprint corner would dip under
+   * water, when the pad drops more than maxDrop (cliff corners), or when the
+   * site sits above the green belt (alpine peaks keep no houses). On gentler
+   * uneven ground the house is seated on its highest corner and a stone
+   * plinth fills the gap, so slopes get a terraced foundation instead of a
+   * half-buried hut.
+   */
+  placement: {
+    footprint: [2.8, 2.3],        // half-extents of the pad sampled under the house
+    plinthFootprint: [2.75, 2.25], // stone foundation size (hugs the walls)
+    maxDrop: 2.0,                 // max height difference across the pad (meters)
+    plinthFrom: 0.12,             // lift above center that starts a visible plinth
+    maxAltitude: 34,              // above the rock line the green belt ends
+    spawnClear: 10,               // keep this radius around the spawn point empty
+  },
   fallback: {
     parts: [
       {

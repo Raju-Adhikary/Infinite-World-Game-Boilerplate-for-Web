@@ -32,6 +32,8 @@ export class Game {
     // Water feedback timers (splash edge detection + trailing wake period)
     this._wasInWater = false;
     this._wakeT = 0;
+    // ?t= time-of-day override (0.25 sunrise, 0.5 noon, 0.75 sunset)
+    this._timeParam = null;
   }
 
   async boot() {
@@ -117,17 +119,23 @@ export class Game {
     this.waterFx = new WaterEffects(this.scene);
     this.physics = new PhysicsWorld();
     await this.physics.init();
-    this.chunks = new ChunkManager(this.scene, this.physics, this.entities, this.glb, this.terrainH, this.biome);
-    this.player = new PlayerController(this.camera, this.physics, this.input, this.terrainH, this.scene);
 
-    // Resolve the spawn point ONCE, before the menu renders: the requested
+    // Resolve the spawn point ONCE, before any chunk streams: the requested
     // coordinates when they are on dry land, otherwise the nearest shore from
     // a spiral search. The menu streams the world around THIS point so the
     // backdrop matches what PLAY actually spawns into (it used to stream
     // around the origin while the seed/spawn mechanism could place the player
-    // hundreds of meters away).
+    // hundreds of meters away), and the ChunkManager keeps it to enforce the
+    // prop-free spawn pad.
     this._spawnPoint = this._findSpawn(CFG.world.spawnX, CFG.world.spawnZ);
     this._spawnH = this.terrainH.get(this._spawnPoint.x, this._spawnPoint.z);
+
+    this.chunks = new ChunkManager(this.scene, this.physics, this.entities, this.glb, this.terrainH, this.biome, this._spawnPoint);
+    this.player = new PlayerController(this.camera, this.physics, this.input, this.terrainH, this.scene);
+
+    // Pin the time of day for shareable moments (?t=0.75 = sunset) - also
+    // what makes dusk reproducible for the chunk-boundary seam tests
+    if (this._timeParam !== null) this.sky.time = this._timeParam;
 
     // Touch setup
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
@@ -162,10 +170,10 @@ export class Game {
   /**
    * Seed and coordinate mechanism. Terrain, biomes and every per-chunk prop
    * and bot placement derive from CFG.world.seed (via hashChunk), so a seed
-   * fully determines the world. The seed and spawn coordinates can be pinned
-   * through the URL (?seed=1234&x=100&z=-50), the seed persists across
-   * sessions in localStorage, and the menu footer shows the active seed so a
-   * world can be shared and regenerated exactly.
+   * fully determines the world. The seed, spawn coordinates and time of day
+   * can be pinned through the URL (?seed=1234&x=100&z=-50&t=0.75), the seed
+   * persists across sessions in localStorage, and the menu footer shows the
+   * active seed so a world can be shared and regenerated exactly.
    */
   _applyWorldRequest() {
     const q = new URLSearchParams(location.search);
@@ -181,6 +189,15 @@ export class Game {
     const z = parseFloat(q.get('z'));
     if (Number.isFinite(x)) CFG.world.spawnX = x;
     if (Number.isFinite(z)) CFG.world.spawnZ = z;
+
+    const t = parseFloat(q.get('t'));
+    if (Number.isFinite(t)) this._timeParam = Math.min(1, Math.max(0, t));
+
+    // ?day= overrides the length of a full day in seconds (?day=1000000
+    // effectively freezes the sun - reproducible lighting for screenshots
+    // and for the walk-out / retrace seam tests)
+    const day = parseFloat(q.get('day'));
+    if (Number.isFinite(day) && day > 0) CFG.world.dayLength = day;
   }
 
   _resize() {

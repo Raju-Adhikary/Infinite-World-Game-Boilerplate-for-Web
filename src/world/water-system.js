@@ -15,6 +15,12 @@
  *   the lighting and sun glints ripple with the waves. The old surface only
  *   deformed vertices and never touched normals, which made the open ocean
  *   read as dead flat glass - there was no shoreline to silhouette against.
+ * - the depth field is kept SHORE-LOCKED while the plane glides with the
+ *   player: every wave envelope saturates by ~12m depth, so a budgeted sweep
+ *   re-samples exactly the shallow-band vertices every frame. A pure
+ *   round-robin pass lagged up to ~1.3s behind the player, which misaligned
+ *   the calm band by several meters while walking a shore - waves appeared
+ *   ON the beach and stayed flat offshore, changing with travel direction.
  */
 import * as THREE from 'three';
 import { CFG } from '../config/config.js';
@@ -25,11 +31,16 @@ const PLANE_SIZE = 720;
 // 100 segments over 720m = 7.2m cells - fine enough for the ~20m chop and the
 // shore fade band, while keeping the per-frame wave/normal loop affordable
 const SEGMENTS = 100;
-// Terrain depths are refreshed a few hundred vertices per frame in a
-// round-robin pass instead of all at once (~10k height samples per frame
-// would cost several milliseconds). Terrain never changes, so each vertex
-// only needs an occasional resample as the plane glides along.
-const DEPTH_REFRESH_PER_FRAME = 128;
+// Baseline round-robin keeps the WHOLE plane honest (every vertex re-sampled
+// at least once per pass - deep water included); the shallow sweep below
+// handles the precision-critical shore band.
+const DEPTH_REFRESH_PER_FRAME = 256;
+// Budgeted shore-locked re-samples per frame (see update - the shallow sweep)
+const SHALLOW_REFRESH_PER_FRAME = 320;
+// Depth at which every wave envelope has saturated: shore=1, swellF=1 and
+// deep=1+0.9 all reach their ceiling at 12m, so deeper vertices never need
+// a fresh sample for correct waves
+const SHALLOW_BAND = 12;
 
 // Directional wave trains: y = sum(a * sin(k . xz + w * t)). The surface
 // slope (dy/dx, dy/dz) is derived analytically from the same terms, which
@@ -82,6 +93,8 @@ export class WaterSystem {
       this._depth[i] = this.level - terrain.get(this._base[i * 3], this._base[i * 3 + 2]);
     }
     this._depthCursor = 0;
+    // Rotating start offset of the shallow-band sweep (see update)
+    this._fastCursor = 0;
 
     // Phong + specular so the animated normals throw moving sun glints
     // across the surface (Lambert has no specular response at all)
@@ -143,6 +156,23 @@ export class WaterSystem {
       this._depth[i] = this.level - this.terrain.get(base[i * 3] + ox, base[i * 3 + 2] + oz);
       this._depthCursor = (this._depthCursor + 1) % count;
     }
+
+    // Shallow-band sweep: re-sample the vertices whose depth is still inside
+    // the envelope-varying band, every frame, from a rotating window that
+    // revisits each third of the plane. This keeps the calm shore band glued
+    // to the visible shoreline while the surface glides with the player -
+    // the property the retracing-at-dusk test cares about: walk out along a
+    // beach, turn around, walk back, and the waterline waves match both ways.
+    const stride = Math.max(1, Math.ceil(count / 3));
+    const start = this._fastCursor;
+    let sampled = 0;
+    for (let s = 0; s < count && sampled < SHALLOW_REFRESH_PER_FRAME; s++) {
+      const i = (start + s) % count;
+      if (this._depth[i] >= SHALLOW_BAND) continue;
+      this._depth[i] = this.level - this.terrain.get(base[i * 3] + ox, base[i * 3 + 2] + oz);
+      sampled++;
+    }
+    this._fastCursor = (start + stride) % count;
 
     // Waves + analytic normals, phased in world space (see _base above) and
     // scaled by the local depth envelopes

@@ -20,16 +20,28 @@ const SNOW = new THREE.Color(0xe8ecf2);
 const _tc = new THREE.Color();
 
 export class ChunkManager {
-  constructor(scene, physics, entities, glbCache, terrainH, biomeSys) {
+  constructor(scene, physics, entities, glbCache, terrainH, biomeSys, spawnPoint = null) {
     this.scene = scene;
     this.physics = physics;
     this.entities = entities;
     this.glb = glbCache;
     this.terrainH = terrainH;
     this.biome = biomeSys;
+    this.spawnPoint = spawnPoint;
     this.chunks = new Map();
     this.cfg = CFG.world;
     this.noise = new Noise(this.cfg.seed + 777);
+  }
+
+  // Shared stone material for house plinths (one material for every plinth
+  // in the world - geometries stay per-instance and get disposed on unload)
+  static _plinthMat = null;
+
+  _plinthMaterial() {
+    if (!ChunkManager._plinthMat) {
+      ChunkManager._plinthMat = new THREE.MeshLambertMaterial({ color: 0x99948a });
+    }
+    return ChunkManager._plinthMat;
   }
 
   _chunkOrigin(cx, cz) {
@@ -113,12 +125,30 @@ export class ChunkManager {
 
   _genTerrain(cd, o) {
     const S = this.cfg.chunkSize;
-    const seg = this.cfg.chunkSegments;
+    // The shared-lattice math below needs the vertex grid symmetric around the
+    // chunk center (vertices on multiples of step relative to the origin), so
+    // an odd segment count is bumped to the next even number.
+    const seg = this.cfg.chunkSegments + (this.cfg.chunkSegments % 2);
+    const step = S / seg;
+    const HALF = seg / 2; // PlaneGeometry local vertices run from -S/2 to +S/2
+    const HS = seg + 3;   // centered height lattice incl. a 1-vertex halo ring
+
+    // Height lattice with a halo. Chunk origins are multiples of chunkSize and
+    // vertices sit on multiples of step, so this lattice is GLOBAL: every
+    // neighboring chunk samples the exact same heights along the shared edge.
+    const heights = new Float32Array(HS * HS);
+    for (let j = 0; j < HS; j++) {
+      const wz = o.z + (j - HALF - 1) * step;
+      for (let i = 0; i < HS; i++) {
+        heights[j * HS + i] = this.terrainH.get(o.x + (i - HALF - 1) * step, wz);
+      }
+    }
 
     const geo = new THREE.PlaneGeometry(S, S, seg, seg);
     geo.rotateX(-Math.PI / 2);
 
     const pos = geo.getAttribute('position');
+    const nor = geo.getAttribute('normal');
     const colors = new Float32Array(pos.count * 3);
 
     for (let i = 0; i < pos.count; i++) {
@@ -126,7 +156,10 @@ export class ChunkManager {
       const lz = pos.getZ(i);
       const wx = lx + o.x;
       const wz = lz + o.z;
-      const h = this.terrainH.get(wx, wz);
+
+      const col = Math.round(lx / step) + HALF + 1;
+      const row = Math.round(lz / step) + HALF + 1;
+      const h = heights[row * HS + col];
       pos.setY(i, h);
 
       const b = this.biome.get(wx, wz);
@@ -153,10 +186,24 @@ export class ChunkManager {
       colors[i * 3] = _clamp(c.r + v, 0, 1);
       colors[i * 3 + 1] = _clamp(c.g + v, 0, 1);
       colors[i * 3 + 2] = _clamp(c.b + v, 0, 1);
+
+      // Heightfield normal via central differences of the SHARED lattice.
+      // The old computeVertexNormals() averaged only a chunk's OWN triangles,
+      // so the two sides of a chunk border carried different normals - a
+      // lighting stripe along every border that grazing dusk sunlight made
+      // glow or shadow abruptly while moving. Both chunks now derive the
+      // same numbers from the same lattice: seamless.
+      const hL = heights[row * HS + col - 1];
+      const hR = heights[row * HS + col + 1];
+      const hD = heights[(row - 1) * HS + col];
+      const hU = heights[(row + 1) * HS + col];
+      const nx = hL - hR;
+      const nz = hD - hU;
+      const inv = 1 / Math.sqrt(nx * nx + 4 * step * step + nz * nz);
+      nor.setXYZ(i, nx * inv, 2 * step * inv, nz * inv);
     }
 
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geo.computeVertexNormals();
 
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
 
@@ -225,27 +272,92 @@ export class ChunkManager {
           // Keep flora, rocks and houses out of lakes and their beds
           if (py < CFG.world.waterLevel + 0.3) continue;
 
-          placed.push({ x: px, z: pz });
-
           const scale = sCfg.scale[0] + rng.next() * (sCfg.scale[1] - sCfg.scale[0]);
           const rotY = rng.next() * Math.PI * 2;
+
+          // Slope-aware placement for profiles that declare a `placement`
+          // block (houses). The center height alone says nothing about the
+          // ground under the whole footprint - sampling just it seated houses
+          // half-buried on mountain corners or floating off cliff lips.
+          let seatY = py;
+          let plinth = null;
+          const pl = sCfg.placement;
+          if (pl) {
+            // Bounding square of the rotated footprint, plus settling margin
+            const fp = Math.hypot(pl.footprint[0], pl.footprint[1]) * scale + 0.35;
+            let hMin = py, hMax = py;
+            let wet = false;
+            for (let c = 0; c < 4; c++) {
+              const h = this.terrainH.gridHeight(
+                px + (c & 1 ? fp : -fp),
+                pz + (c & 2 ? fp : -fp)
+              );
+              if (h < hMin) hMin = h;
+              if (h > hMax) hMax = h;
+              if (h < CFG.world.waterLevel + 0.3) wet = true;
+            }
+            // Invalid sites: any corner underwater, a drop across the pad
+            // steeper than the profile accepts, ground above the green belt
+            // (alpine peaks keep no houses), or the spawn pad itself - the
+            // player must never drop out of the sky onto a roof.
+            if (wet || hMax - hMin > pl.maxDrop
+              || (pl.maxAltitude && py > pl.maxAltitude)
+              || (pl.spawnClear && this.spawnPoint
+                && (px - this.spawnPoint.x) ** 2 + (pz - this.spawnPoint.z) ** 2 < pl.spawnClear * pl.spawnClear)) {
+              continue;
+            }
+            // Seat the house on its HIGHEST corner and let a stone plinth
+            // fill the gap under the rest - reads as a terraced foundation
+            // instead of a house glued to a slope. The plinth hugs the walls
+            // (rotated with the house); the pad SAMPLING above stays on the
+            // rotation-independent bounding square.
+            seatY = hMax + 0.02;
+            if (seatY - py > pl.plinthFrom) {
+              plinth = {
+                halfX: pl.plinthFootprint[0] * scale + 0.15,
+                halfZ: pl.plinthFootprint[1] * scale + 0.15,
+                top: seatY,
+                bottom: hMin - 0.75,
+              };
+            }
+          }
+
+          placed.push({ x: px, z: pz });
+
           const url = CFG.glbModels[sName];
-          const physicsBodyId = this._createSpawnPhysicsBody(sCfg, px, py, pz, scale);
+          const physicsBodyIds = [];
+          const mainBodyId = this._createSpawnPhysicsBody(sCfg, px, seatY, pz, scale, rotY);
+          if (mainBodyId) physicsBodyIds.push(mainBodyId);
+          if (plinth) physicsBodyIds.push(this._createPlinthBody(plinth, px, seatY, pz, rotY));
+          const dropBodies = () => {
+            for (const id of physicsBodyIds) this.physics.removeBody(id);
+          };
 
           this.glb.load(sName, url).then(model => {
             // The load resolves asynchronously - the chunk may have been
             // unloaded in the meantime. Skip and release the already-created
-            // physics body, otherwise it (and the entity) leaks forever.
+            // physics bodies, otherwise they (and the entity) leak forever.
             if (cd.disposed) {
-              if (physicsBodyId) this.physics.removeBody(physicsBodyId);
+              dropBodies();
               return;
+            }
+            if (plinth) {
+              const ph = plinth.top - plinth.bottom;
+              const stone = new THREE.Mesh(
+                new THREE.BoxGeometry(plinth.halfX * 2, ph, plinth.halfZ * 2),
+                this._plinthMaterial()
+              );
+              stone.position.set(px - o.x, plinth.bottom + ph / 2, pz - o.z);
+              stone.rotation.y = rotY;
+              stone.castShadow = stone.receiveShadow = CFG.settings.shadows;
+              cd.group.add(stone);
             }
             const inst = model.scene.clone();
             // GLB clips when present, otherwise a gentle wind sway for flora
             const animation = this.glb.createAnimationController(model, inst, sCfg.animations || null)
               || (sCfg.sway ? createSwayAnimator(inst) : null);
             inst.scale.setScalar(scale);
-            inst.position.set(px - o.x, py, pz - o.z);
+            inst.position.set(px - o.x, seatY, pz - o.z);
             inst.rotation.y = rotY;
             inst.traverse(c => {
               if (c.isMesh) c.castShadow = CFG.settings.shadows;
@@ -255,10 +367,11 @@ export class ChunkManager {
 
             const eid = this.entities.add({
               type: sName,
-              position: new THREE.Vector3(px, py, pz),
+              position: new THREE.Vector3(px, seatY, pz),
               chunk: _key(cx, cz),
               mesh: inst,
-              physicsBodyId,
+              physicsBodyId: mainBodyId,
+              physicsBodyIds,
               scale,
               biome,
               animation
@@ -266,7 +379,7 @@ export class ChunkManager {
             if (animation) animation.playAction('idle');
             cd.bodyIds.push(eid);
           }).catch(() => {
-            if (!cd.disposed && physicsBodyId) this.physics.removeBody(physicsBodyId);
+            if (!cd.disposed) dropBodies();
           });
         }
       }
@@ -361,12 +474,32 @@ export class ChunkManager {
     }
   }
 
-  _createSpawnPhysicsBody(profile, px, py, pz, scale) {
+  _createSpawnPhysicsBody(profile, px, py, pz, scale, rotY = 0) {
     const collider = this._spawnColliderFor(profile, scale);
     if (!collider) return null;
 
     const bodyDesc = Rapier.RigidBodyDesc.fixed().setTranslation(px, py, pz);
+    // Match the visual yaw so cuboid colliders (houses) align with the
+    // rotated model instead of presenting an axis-aligned wall to the player
+    if (rotY) bodyDesc.setRotation({ x: 0, y: Math.sin(rotY / 2), z: 0, w: Math.cos(rotY / 2) });
     const { id } = this.physics.createBody(bodyDesc, collider);
+    return id;
+  }
+
+  /**
+   * Solid stone foundation under a slope-seated house: a cuboid from below
+   * ground up to the seat height, so the plinth is walkable terrain rather
+   * than painted-on rock the player phases through.
+   */
+  _createPlinthBody(plinth, px, py, pz, rotY = 0) {
+    const ph = plinth.top - plinth.bottom;
+    const colDesc = Rapier.ColliderDesc.cuboid(plinth.halfX, ph / 2, plinth.halfZ)
+      .setTranslation(0, (plinth.bottom + ph / 2) - py, 0)
+      .setCollisionGroups(GROUP_PROP);
+    const bodyDesc = Rapier.RigidBodyDesc.fixed()
+      .setTranslation(px, py, pz)
+      .setRotation({ x: 0, y: Math.sin(rotY / 2), z: 0, w: Math.cos(rotY / 2) });
+    const { id } = this.physics.createBody(bodyDesc, colDesc);
     return id;
   }
 
@@ -408,7 +541,9 @@ export class ChunkManager {
     for (const eid of cd.bodyIds) {
       const e = this.entities.get(eid);
       if (!e) continue;
-      if (e.physicsBodyId !== undefined && e.physicsBodyId !== null) {
+      if (e.physicsBodyIds) {
+        for (const id of e.physicsBodyIds) this.physics.removeBody(id);
+      } else if (e.physicsBodyId !== undefined && e.physicsBodyId !== null) {
         this.physics.removeBody(e.physicsBodyId);
       }
       this.entities.remove(eid);
