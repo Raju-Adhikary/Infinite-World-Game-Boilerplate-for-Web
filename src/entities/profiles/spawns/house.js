@@ -1,7 +1,14 @@
 export const house = {
   biomes: ['plains', 'forest'],
-  density: 0.015,
-  minDist: 20,
+  /**
+   * Houses are VILLAGE-ONLY now (see world/village-system.js). The old flat
+   * 0.015 density per 8m cell sprinkled lone huts across the whole wilderness
+   * with no settlement ever forming; the VillageSystem instead groups 4-8
+   * houses around an open center, doors facing the square, residents included.
+   * `village: true` excludes the profile from the per-cell scatter and marks
+   * it for the village slot spawner.
+   */
+  village: true,
   scale: [0.9, 1.1],
   /**
    * Placement rules (handled by ChunkManager). Houses declare the ground pad

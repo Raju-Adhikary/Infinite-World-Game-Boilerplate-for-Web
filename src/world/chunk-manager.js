@@ -8,6 +8,7 @@ import { CFG } from '../config/config.js';
 import { SeededRandom, _key, _clamp, hashChunk } from '../core/utils.js';
 import { GROUP_TERRAIN, GROUP_PROP } from '../core/physics.js';
 import { Noise } from '../core/noise.js';
+import { VillageSystem } from './village-system.js';
 import { createBotMesh } from '../entities/bot-mesh.js';
 import { createProceduralAnimator, createSwayAnimator } from '../entities/procedural-animator.js';
 
@@ -31,6 +32,9 @@ export class ChunkManager {
     this.chunks = new Map();
     this.cfg = CFG.world;
     this.noise = new Noise(this.cfg.seed + 777);
+    // Deterministic village sites + house slots + residents (see the module
+    // doc) - houses no longer scatter per-cell across the wilderness
+    this.villages = new VillageSystem(this.cfg.seed, terrainH, biomeSys);
   }
 
   // Shared stone material for house plinths (one material for every plinth
@@ -118,6 +122,9 @@ export class ChunkManager {
 
     // Spawn objects
     this._spawnObjects(cd, o, cx, cz);
+
+    // Spawn village houses + residents (slots inside this chunk's bounds)
+    this._spawnVillageContent(cd, o, cx, cz);
 
     // Spawn bots
     this._spawnBots(cd, o, cx, cz);
@@ -246,7 +253,11 @@ export class ChunkManager {
         const biome = this.biome.get(wx, wz);
 
         for (const [sName, sCfg] of Object.entries(CFG.spawns)) {
+          // Village-only profiles (houses) spawn from VillageSystem slots, not
+          // from this per-cell scatter
+          if (sCfg.village) continue;
           if (!sCfg.biomes.includes(biome)) continue;
+
           const density = this._getDensity(sCfg.density, biome);
           if (rng.next() > density) continue;
 
@@ -255,6 +266,13 @@ export class ChunkManager {
           const oz = (rng.next() - 0.5) * cellSize * 0.7;
           const px = wx + ox;
           const pz = wz + oz;
+
+          // Villages keep their ground clear: no trees, rocks or bushes inside
+          // the settlement (flowers stay - a kept lawn still blooms). Checked
+          // on the jittered position so a border cell's tree cannot lean into
+          // a house pad.
+          if (sName !== 'flower'
+            && this.villages.inVillageGround(px, pz)) continue;
 
           let tooClose = false;
           for (const p of placed) {
@@ -269,118 +287,27 @@ export class ChunkManager {
           // samples the noise at its vertices, so using get() here let props
           // hover or sink on curved slopes.
           const py = this.terrainH.gridHeight(px, pz);
-          // Keep flora, rocks and houses out of lakes and their beds
+          // Keep flora, rocks out of lakes and their beds
           if (py < CFG.world.waterLevel + 0.3) continue;
 
           const scale = sCfg.scale[0] + rng.next() * (sCfg.scale[1] - sCfg.scale[0]);
           const rotY = rng.next() * Math.PI * 2;
 
           // Slope-aware placement for profiles that declare a `placement`
-          // block (houses). The center height alone says nothing about the
-          // ground under the whole footprint - sampling just it seated houses
-          // half-buried on mountain corners or floating off cliff lips.
+          // block: reject unbuildable pads and seat on a stone plinth.
           let seatY = py;
           let plinth = null;
-          const pl = sCfg.placement;
-          if (pl) {
-            // Bounding square of the rotated footprint, plus settling margin
-            const fp = Math.hypot(pl.footprint[0], pl.footprint[1]) * scale + 0.35;
-            let hMin = py, hMax = py;
-            let wet = false;
-            for (let c = 0; c < 4; c++) {
-              const h = this.terrainH.gridHeight(
-                px + (c & 1 ? fp : -fp),
-                pz + (c & 2 ? fp : -fp)
-              );
-              if (h < hMin) hMin = h;
-              if (h > hMax) hMax = h;
-              if (h < CFG.world.waterLevel + 0.3) wet = true;
-            }
-            // Invalid sites: any corner underwater, a drop across the pad
-            // steeper than the profile accepts, ground above the green belt
-            // (alpine peaks keep no houses), or the spawn pad itself - the
-            // player must never drop out of the sky onto a roof.
-            if (wet || hMax - hMin > pl.maxDrop
-              || (pl.maxAltitude && py > pl.maxAltitude)
-              || (pl.spawnClear && this.spawnPoint
-                && (px - this.spawnPoint.x) ** 2 + (pz - this.spawnPoint.z) ** 2 < pl.spawnClear * pl.spawnClear)) {
-              continue;
-            }
-            // Seat the house on its HIGHEST corner and let a stone plinth
-            // fill the gap under the rest - reads as a terraced foundation
-            // instead of a house glued to a slope. The plinth hugs the walls
-            // (rotated with the house); the pad SAMPLING above stays on the
-            // rotation-independent bounding square.
-            seatY = hMax + 0.02;
-            if (seatY - py > pl.plinthFrom) {
-              plinth = {
-                halfX: pl.plinthFootprint[0] * scale + 0.15,
-                halfZ: pl.plinthFootprint[1] * scale + 0.15,
-                top: seatY,
-                bottom: hMin - 0.75,
-              };
-            }
+          if (sCfg.placement) {
+            const seat = this._seatProfile(sCfg, px, pz, scale);
+            if (!seat.ok) continue;
+            seatY = seat.seatY;
+            plinth = seat.plinth;
           }
 
           placed.push({ x: px, z: pz });
 
-          const url = CFG.glbModels[sName];
-          const physicsBodyIds = [];
-          const mainBodyId = this._createSpawnPhysicsBody(sCfg, px, seatY, pz, scale, rotY);
-          if (mainBodyId) physicsBodyIds.push(mainBodyId);
-          if (plinth) physicsBodyIds.push(this._createPlinthBody(plinth, px, seatY, pz, rotY));
-          const dropBodies = () => {
-            for (const id of physicsBodyIds) this.physics.removeBody(id);
-          };
-
-          this.glb.load(sName, url).then(model => {
-            // The load resolves asynchronously - the chunk may have been
-            // unloaded in the meantime. Skip and release the already-created
-            // physics bodies, otherwise they (and the entity) leak forever.
-            if (cd.disposed) {
-              dropBodies();
-              return;
-            }
-            if (plinth) {
-              const ph = plinth.top - plinth.bottom;
-              const stone = new THREE.Mesh(
-                new THREE.BoxGeometry(plinth.halfX * 2, ph, plinth.halfZ * 2),
-                this._plinthMaterial()
-              );
-              stone.position.set(px - o.x, plinth.bottom + ph / 2, pz - o.z);
-              stone.rotation.y = rotY;
-              stone.castShadow = stone.receiveShadow = CFG.settings.shadows;
-              cd.group.add(stone);
-            }
-            const inst = model.scene.clone();
-            // GLB clips when present, otherwise a gentle wind sway for flora
-            const animation = this.glb.createAnimationController(model, inst, sCfg.animations || null)
-              || (sCfg.sway ? createSwayAnimator(inst) : null);
-            inst.scale.setScalar(scale);
-            inst.position.set(px - o.x, seatY, pz - o.z);
-            inst.rotation.y = rotY;
-            inst.traverse(c => {
-              if (c.isMesh) c.castShadow = CFG.settings.shadows;
-              c.userData.cachedInstance = true;
-            });
-            cd.group.add(inst);
-
-            const eid = this.entities.add({
-              type: sName,
-              position: new THREE.Vector3(px, seatY, pz),
-              chunk: _key(cx, cz),
-              mesh: inst,
-              physicsBodyId: mainBodyId,
-              physicsBodyIds,
-              scale,
-              biome,
-              animation
-            });
-            if (animation) animation.playAction('idle');
-            cd.bodyIds.push(eid);
-          }).catch(() => {
-            if (!cd.disposed) dropBodies();
-          });
+          this._spawnProfileInstance(cd, o, cx, cz, sName, sCfg,
+            px, seatY, pz, scale, rotY, plinth);
         }
       }
     }
@@ -406,72 +333,240 @@ export class ChunkManager {
       const sx = px - CFG.world.spawnX;
       const sz = pz - CFG.world.spawnZ;
       if (sx * sx + sz * sz < CFG.world.safeSpawnRadius * CFG.world.safeSpawnRadius) continue;
-      // Grid height keeps bot feet on the rendered surface instead of the
-      // analytic field the mesh only approximates.
-      const py = this.terrainH.gridHeight(px, pz);
-      // No mobs standing around at the bottom of a lake
-      if (py < CFG.world.waterLevel + 0.3) continue;
-      const url = CFG.glbModels[bName];
 
-      const spawnBot = (model = null) => {
-        if (cd.disposed) return; // chunk unloaded while the model was loading
-        const mesh = model?.scene ? model.scene.clone() : createBotMesh(bCfg);
-        // GLB clip mixer when a real model exists, procedural limb animation
-        // (walk / idle / attack / flee) for the procedural fallback meshes
-        let animator = model ? this.glb.createAnimationController(model, mesh, bCfg.animations || null) : null;
-        if (!animator) animator = createProceduralAnimator(mesh);
-        mesh.position.set(px - o.x, py, pz - o.z);
-        mesh.rotation.y = rng.next() * Math.PI * 2;
-        mesh.traverse(c => {
-          if (c.isMesh) c.castShadow = CFG.settings.shadows;
-          if (model?.scene) c.userData.cachedInstance = true;
-        });
-        cd.group.add(mesh);
+      this._createBot(cd, o, cx, cz, bName, bCfg, px, pz, rng);
+    }
+  }
 
-        // Bot capsule is slimmer than before (r 0.4 -> 0.3) so the player
-        // stops close to a mob instead of pushing against an invisible blob.
-        const colDesc = Rapier.ColliderDesc.capsule(0.5, 0.3)
-          .setTranslation(0, 0.95, 0)
-          .setCollisionGroups(GROUP_PROP);
-        const bodyDesc = Rapier.RigidBodyDesc.kinematicPositionBased();
-        const { body, id: bid } = this.physics.createBody(bodyDesc, colDesc);
-        body.setTranslation({ x: px, y: py, z: pz }, true);
+  /**
+   * One bot instance: mesh + animator + kinematic physics body + entity.
+   * Shared by the per-chunk random spawns and the village residents so both
+   * get identical capsule, animation and cleanup behavior.
+   */
+  _createBot(cd, o, cx, cz, bName, bCfg, px, pz, rng) {
+    // Grid height keeps bot feet on the rendered surface instead of the
+    // analytic field the mesh only approximates.
+    const py = this.terrainH.gridHeight(px, pz);
+    // No mobs standing around at the bottom of a lake
+    if (py < CFG.world.waterLevel + 0.3) return;
+    const url = CFG.glbModels[bName];
 
-        const eid = this.entities.add({
-          type: bName,
-          category: 'bot',
-          position: new THREE.Vector3(px, py, pz),
-          chunk: _key(cx, cz),
-          mesh,
-          bodyId: bid,
-          physicsBodyId: bid,
-          state: 'idle',
-          stateTimer: rng.range(1, 4),
-          action: 'idle',
-          targetPos: null,
-          speed: bCfg.speed,
-          detect: bCfg.detect,
-          flee: bCfg.flee,
-          behavior: bCfg.behavior || (bCfg.flee > 0 ? 'flee' : bCfg.attackRange > 0 ? 'aggressive' : 'passive'),
-          attackRange: bCfg.attackRange || 0,
-          attackCooldown: bCfg.attackCooldown || 0,
-          attackForce: bCfg.attackForce || 0,
-          angryDuration: bCfg.angryDuration || 0,
-          attackTimer: 0,
-          angerTimer: 0,
-          animation: animator,
-          config: bCfg
-        });
-        if (animator) animator.playAction('idle');
-        cd.bodyIds.push(eid);
-      };
+    const spawnBot = (model = null) => {
+      if (cd.disposed) return; // chunk unloaded while the model was loading
+      const mesh = model?.scene ? model.scene.clone() : createBotMesh(bCfg);
+      // GLB clip mixer when a real model exists, procedural limb animation
+      // (walk / idle / attack / flee) for the procedural fallback meshes
+      let animator = model ? this.glb.createAnimationController(model, mesh, bCfg.animations || null) : null;
+      if (!animator) animator = createProceduralAnimator(mesh);
+      mesh.position.set(px - o.x, py, pz - o.z);
+      mesh.rotation.y = rng.next() * Math.PI * 2;
+      mesh.traverse(c => {
+        if (c.isMesh) c.castShadow = CFG.settings.shadows;
+        if (model?.scene) c.userData.cachedInstance = true;
+      });
+      cd.group.add(mesh);
 
-      if (url) {
-        this.glb.load(bName, url).then(model => spawnBot(model)).catch(() => spawnBot());
-      } else {
-        spawnBot();
+      // Bot capsule is slimmer than before (r 0.4 -> 0.3) so the player
+      // stops close to a mob instead of pushing against an invisible blob.
+      const colDesc = Rapier.ColliderDesc.capsule(0.5, 0.3)
+        .setTranslation(0, 0.95, 0)
+        .setCollisionGroups(GROUP_PROP);
+      const bodyDesc = Rapier.RigidBodyDesc.kinematicPositionBased();
+      const { body, id: bid } = this.physics.createBody(bodyDesc, colDesc);
+      body.setTranslation({ x: px, y: py, z: pz }, true);
+
+      const eid = this.entities.add({
+        type: bName,
+        category: 'bot',
+        position: new THREE.Vector3(px, py, pz),
+        chunk: _key(cx, cz),
+        mesh,
+        bodyId: bid,
+        physicsBodyId: bid,
+        state: 'idle',
+        stateTimer: rng.range(1, 4),
+        action: 'idle',
+        targetPos: null,
+        speed: bCfg.speed,
+        detect: bCfg.detect,
+        flee: bCfg.flee,
+        // Close-range hearing: foliage and hills constantly break the eye-ray
+        // in jungle/swamp, which let zombies stand beside the player without
+        // ever aggroing (see bot-ai.js)
+        hearing: bCfg.hearing || 0,
+        behavior: bCfg.behavior || (bCfg.flee > 0 ? 'flee' : bCfg.attackRange > 0 ? 'aggressive' : 'passive'),
+        attackRange: bCfg.attackRange || 0,
+        attackCooldown: bCfg.attackCooldown || 0,
+        attackForce: bCfg.attackForce || 0,
+        angryDuration: bCfg.angryDuration || 0,
+        attackTimer: 0,
+        angerTimer: 0,
+        animation: animator,
+        config: bCfg
+      });
+      if (animator) animator.playAction('idle');
+      cd.bodyIds.push(eid);
+    };
+
+    if (url) {
+      this.glb.load(bName, url).then(model => spawnBot(model)).catch(() => spawnBot());
+    } else {
+      spawnBot();
+    }
+  }
+
+  /**
+   * Villages: houses from the shared VillageSystem slots plus the residents.
+   * Sites and slots are pure functions of (seed, lattice cell), so the chunk
+   * that happens to own a slot spawns it exactly once - no duplication at
+   * chunk borders, no cross-chunk coordination.
+   */
+  _spawnVillageContent(cd, o, cx, cz) {
+    const S = this.cfg.chunkSize;
+    const sites = this.villages.sitesInRect(o.x, o.z, o.x + S, o.z + S);
+    if (!sites.length) return;
+
+    const sCfg = CFG.spawns.house;
+    if (!sCfg) return;
+
+    for (const site of sites) {
+      for (const slot of this.villages.slotsOf(site)) {
+        if (slot.x < o.x || slot.x >= o.x + S || slot.z < o.z || slot.z >= o.z + S) continue;
+        // Re-validate against the terrain: the slot checks run on the same
+        // pad math, so this rejects only when spawn rules changed mid-session
+        const seat = this._seatProfile(sCfg, slot.x, slot.z, slot.scale);
+        if (!seat.ok) continue;
+        this._spawnProfileInstance(cd, o, cx, cz, 'house', sCfg,
+          slot.x, seat.seatY, slot.z, slot.scale, slot.rotY, seat.plinth);
+      }
+
+      // Residents spawn in whatever chunk owns their exact position (they
+      // jitter up to ~9m around the center, so a border village's residents
+      // can legally belong to the neighboring chunk)
+      for (const b of site.bots) {
+        if (b.x < o.x || b.x >= o.x + S || b.z < o.z || b.z >= o.z + S) continue;
+        const bCfg = CFG.bots[b.type];
+        if (!bCfg) continue;
+        // Same mob-free spawn pad rule as the random spawns
+        const sx = b.x - CFG.world.spawnX;
+        const sz = b.z - CFG.world.spawnZ;
+        if (sx * sx + sz * sz < CFG.world.safeSpawnRadius * CFG.world.safeSpawnRadius) continue;
+        const rng = new SeededRandom(hashChunk(this.cfg.seed ^ 0x0dd1ce5, Math.round(b.x * 10), Math.round(b.z * 10)));
+        this._createBot(cd, o, cx, cz, b.type, bCfg, b.x, b.z, rng);
       }
     }
+  }
+
+  /**
+   * Shared pad evaluation for profiles with a `placement` block (houses):
+   * rejects unbuildable sites (corner underwater, drop steeper than the
+   * profile accepts, above the green belt, on the spawn pad) and seats
+   * buildable ones on their highest corner with a stone plinth filling the
+   * gap - used by BOTH the wild-prop scatter and the village house slots.
+   */
+  _seatProfile(sCfg, px, pz, scale) {
+    const pl = sCfg.placement;
+    // Grid height, not the analytic field - the mesh only samples vertices
+    const py = this.terrainH.gridHeight(px, pz);
+    if (py < CFG.world.waterLevel + 0.3) return { ok: false };
+
+    // Bounding square of the rotated footprint, plus settling margin
+    const fp = Math.hypot(pl.footprint[0], pl.footprint[1]) * scale + 0.35;
+    let hMin = py, hMax = py;
+    let wet = false;
+    for (let c = 0; c < 4; c++) {
+      const h = this.terrainH.gridHeight(
+        px + (c & 1 ? fp : -fp),
+        pz + (c & 2 ? fp : -fp)
+      );
+      if (h < hMin) hMin = h;
+      if (h > hMax) hMax = h;
+      if (h < CFG.world.waterLevel + 0.3) wet = true;
+    }
+    if (wet || hMax - hMin > pl.maxDrop
+      || (pl.maxAltitude && py > pl.maxAltitude)
+      || (pl.spawnClear && this.spawnPoint
+        && (px - this.spawnPoint.x) ** 2 + (pz - this.spawnPoint.z) ** 2 < pl.spawnClear * pl.spawnClear)) {
+      return { ok: false };
+    }
+    // Seat on the HIGHEST corner; a stone plinth fills the gap under the
+    // rest - reads as a terraced foundation instead of a half-buried hut
+    const seatY = hMax + 0.02;
+    let plinth = null;
+    if (seatY - py > pl.plinthFrom) {
+      plinth = {
+        halfX: pl.plinthFootprint[0] * scale + 0.15,
+        halfZ: pl.plinthFootprint[1] * scale + 0.15,
+        top: seatY,
+        bottom: hMin - 0.75,
+      };
+    }
+    return { ok: true, seatY, plinth };
+  }
+
+  /**
+   * One spawn-profile instance: physics bodies + plinth body + async GLB
+   * (or fallback) mesh + entity registration. Shared by the per-cell scatter
+   * and the village house slots.
+   */
+  _spawnProfileInstance(cd, o, cx, cz, sName, sCfg, px, seatY, pz, scale, rotY, plinth) {
+    const url = CFG.glbModels[sName];
+    const physicsBodyIds = [];
+    const mainBodyId = this._createSpawnPhysicsBody(sCfg, px, seatY, pz, scale, rotY);
+    if (mainBodyId) physicsBodyIds.push(mainBodyId);
+    if (plinth) physicsBodyIds.push(this._createPlinthBody(plinth, px, seatY, pz, rotY));
+    const dropBodies = () => {
+      for (const id of physicsBodyIds) this.physics.removeBody(id);
+    };
+
+    this.glb.load(sName, url).then(model => {
+      // The load resolves asynchronously - the chunk may have been
+      // unloaded in the meantime. Skip and release the already-created
+      // physics bodies, otherwise they (and the entity) leak forever.
+      if (cd.disposed) {
+        dropBodies();
+        return;
+      }
+      if (plinth) {
+        const ph = plinth.top - plinth.bottom;
+        const stone = new THREE.Mesh(
+          new THREE.BoxGeometry(plinth.halfX * 2, ph, plinth.halfZ * 2),
+          this._plinthMaterial()
+        );
+        stone.position.set(px - o.x, plinth.bottom + ph / 2, pz - o.z);
+        stone.rotation.y = rotY;
+        stone.castShadow = stone.receiveShadow = CFG.settings.shadows;
+        cd.group.add(stone);
+      }
+      const inst = model.scene.clone();
+      // GLB clips when present, otherwise a gentle wind sway for flora
+      const animation = this.glb.createAnimationController(model, inst, sCfg.animations || null)
+        || (sCfg.sway ? createSwayAnimator(inst) : null);
+      inst.scale.setScalar(scale);
+      inst.position.set(px - o.x, seatY, pz - o.z);
+      inst.rotation.y = rotY;
+      inst.traverse(c => {
+        if (c.isMesh) c.castShadow = CFG.settings.shadows;
+        c.userData.cachedInstance = true;
+      });
+      cd.group.add(inst);
+
+      const eid = this.entities.add({
+        type: sName,
+        position: new THREE.Vector3(px, seatY, pz),
+        chunk: _key(cx, cz),
+        mesh: inst,
+        physicsBodyId: mainBodyId,
+        physicsBodyIds,
+        scale,
+        biome: this.biome.get(px, pz),
+        animation
+      });
+      if (animation) animation.playAction('idle');
+      cd.bodyIds.push(eid);
+    }).catch(() => {
+      if (!cd.disposed) dropBodies();
+    });
   }
 
   _createSpawnPhysicsBody(profile, px, py, pz, scale, rotY = 0) {
