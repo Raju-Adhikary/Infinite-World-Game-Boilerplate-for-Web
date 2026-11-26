@@ -44,12 +44,16 @@ export function updateBots(entities, physics, terrainH, playerPos, player, dt) {
           bot.state = 'flee';
           break;
         }
-        if (behavior === 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos)) {
+        // Aggro = sight OR hearing. Sight is the eye-ray (foliage and rolling
+        // ground break it constantly in jungle/swamp); hearing is a short
+        // close-range radius that ignores line of sight, so a zombie can no
+        // longer stand three meters behind a tree and ignore the player.
+        if (behavior === 'aggressive' && _sensesPlayer(bot, dist, physics, bPos, playerPos)) {
           bot.state = 'angry';
           bot.angerTimer = Math.max(bot.angerTimer, bot.angryDuration || 3);
           break;
         }
-        if (bot.flee === 0 && behavior !== 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos)) {
+        if (bot.flee === 0 && behavior !== 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos, bot.bodyId)) {
           bot.state = 'follow';
           break;
         }
@@ -77,7 +81,7 @@ export function updateBots(entities, physics, terrainH, playerPos, player, dt) {
           bot.state = 'flee';
           break;
         }
-        if (behavior === 'aggressive' && dist < bot.detect && _hasLos(physics, bPos, playerPos)) {
+        if (behavior === 'aggressive' && _sensesPlayer(bot, dist, physics, bPos, playerPos)) {
           bot.state = 'angry';
           bot.angerTimer = Math.max(bot.angerTimer, bot.angryDuration || 3);
           break;
@@ -101,8 +105,6 @@ export function updateBots(entities, physics, terrainH, playerPos, player, dt) {
         _moveBot(bot, bot.targetPos, bot.speed, dt, terrainH, physics);
         nextAction = 'walk';
         break;
-
-      case 'follow':
         if (dist > bot.detect * 1.5) {
           bot.state = 'idle';
           bot.stateTimer = 1;
@@ -197,6 +199,18 @@ export function updateBots(entities, physics, terrainH, playerPos, player, dt) {
   }
 }
 
+/**
+ * Aggressive senses: clear line of sight within detect range, OR anything
+ * closer than the profile's hearing radius. Hearing needs no ray - it stands
+ * in for footsteps/scent, which dense jungle leaves and hillsides do not
+ * muffle. Without it, monsters in their own biomes (thick foliage, broken
+ * ground) failed the LOS ray over and over and never chased the player.
+ */
+function _sensesPlayer(bot, dist, physics, bPos, playerPos) {
+  if (dist < (bot.hearing || 0)) return true;
+  return dist < bot.detect && _hasLos(physics, bPos, playerPos, bot.bodyId);
+}
+
 function _attackPlayer(bot, playerPos, player, bPos) {
   const body = player?.body;
   if (!body || typeof body.applyImpulse !== 'function') return;
@@ -231,17 +245,18 @@ function _moveBot(bot, target, speed, dt, terrainH, physics) {
   // what, so without this check mobs ghosted straight through trees, rocks
   // and houses. The ray is capped short of the destination so the player's
   // own capsule (same collision group as props) never reads as a wall while
-  // a mob closes in for the attack.
+  // a mob closes in for the attack, and the mob's OWN capsule is excluded
+  // from the query (see _blocked).
   let mx = nx;
   let mz = nz;
   const rayLen = Math.min(1.4, dist - 0.9);
-  if (rayLen > 0.3 && _blocked(physics, bPos, nx, nz, rayLen)) {
+  if (rayLen > 0.3 && _blocked(physics, bPos, nx, nz, rayLen, bot.bodyId)) {
     let clear = false;
     for (const deg of [40, -40, 80, -80]) {
       const a = deg * Math.PI / 180;
       const cx = nx * Math.cos(a) - nz * Math.sin(a);
       const cz = nx * Math.sin(a) + nz * Math.cos(a);
-      if (!_blocked(physics, bPos, cx, cz, rayLen)) {
+      if (!_blocked(physics, bPos, cx, cz, rayLen, bot.bodyId)) {
         mx = cx;
         mz = cz;
         clear = true;
@@ -277,19 +292,24 @@ function _moveBot(bot, target, speed, dt, terrainH, physics) {
   bot.currentSpeed = speed; // remembered for the procedural walk animation
 }
 
-function _blocked(physics, origin, dx, dz, len) {
+function _blocked(physics, origin, dx, dz, len, selfBodyId) {
   const from = { x: origin.x, y: origin.y + 0.7, z: origin.z };
   const to = { x: origin.x + dx * len, y: origin.y + 0.7, z: origin.z + dz * len };
-  return physics.raycast(from, to, RAY_PROP_ONLY) !== null;
+  // The ray starts INSIDE the mob's own capsule (capsule spans +0.15..+1.75,
+  // ray at +0.7), and Rapier's solid=false treats shapes as hollow - without
+  // excluding the own body the ray pierced its own capsule wall at ~0.3m in
+  // EVERY direction, so every mob read as boxed in and froze in place.
+  return physics.raycast(from, to, RAY_PROP_ONLY, selfBodyId) !== null;
 }
 
 /**
  * True when nothing stands between the bot's eyes and the player's chest.
  * The ray stops 0.8 short of the chest so the player capsule never counts as
- * an obstruction, and starts inside the bot's own capsule which raycast()
- * already ignores (solid = false).
+ * an obstruction, and excludes the bot's own capsule - it starts inside it
+ * (eye at +1.4, capsule top at +1.75) and Rapier's solid=false would report
+ * the capsule's own exit wall as a hit, blinding every mob permanently.
  */
-function _hasLos(physics, bPos, playerPos) {
+function _hasLos(physics, bPos, playerPos, selfBodyId) {
   const fx = bPos.x;
   const fy = bPos.y + 1.4;
   const fz = bPos.z;
@@ -301,5 +321,5 @@ function _hasLos(physics, bPos, playerPos) {
 
   const t = (dist - 0.8) / dist;
   const to = { x: fx + dx * t, y: fy + dy * t, z: fz + dz * t };
-  return physics.raycast({ x: fx, y: fy, z: fz }, to) === null;
+  return physics.raycast({ x: fx, y: fy, z: fz }, to, undefined, selfBodyId) === null;
 }

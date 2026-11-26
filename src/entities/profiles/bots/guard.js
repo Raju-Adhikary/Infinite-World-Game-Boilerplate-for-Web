@@ -19,6 +19,9 @@ export const guard = {
   },
   speed: 3.4,
   detect: 22,
+  // Hearing: guards react at close range even when houses or trees block the
+  // eye-ray (village grounds have plenty of both)
+  hearing: 8,
   flee: 0,
   behavior: 'aggressive',
   attackRange: 1.7,

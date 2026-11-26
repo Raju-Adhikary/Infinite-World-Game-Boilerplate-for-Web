@@ -19,6 +19,10 @@ export const monster = {
   },
   speed: 4.2,
   detect: 20,
+  // Close-range hearing (scent/footsteps): works with no line of sight, so
+  // jungle leaves and swamp shrubs can no longer blind a zombie standing
+  // right next to the player. Sight still does the far detection.
+  hearing: 9,
   flee: 0,
   behavior: 'aggressive',
   attackRange: 1.8,

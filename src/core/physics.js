@@ -62,7 +62,7 @@ export class PhysicsWorld {
     this.bodies.delete(id);
   }
 
-  raycast(from, to, filterGroups = undefined) {
+  raycast(from, to, filterGroups = undefined, excludeBodyId = undefined) {
     if (!this.world) return null;
 
     const dx = to.x - from.x;
@@ -72,20 +72,28 @@ export class PhysicsWorld {
     if (dist <= 0) return null;
 
     const dir = { x: dx / dist, y: dy / dist, z: dz / dist };
-    // solid=false: colliders that contain the ray origin are ignored. This
-    // lets a ground-check ray start inside the player's own capsule without
-    // hitting it at toi=0 (terrain trimeshes are hollow, so a ray starting
-    // BELOW the feet would miss the ground entirely).
-    return this.world.castRay(new Rapier.Ray(from, dir), dist, false, undefined, filterGroups);
+    // Rapier's `solid` flag decides how a ray that STARTS inside a collider
+    // behaves: solid=true reports an immediate toi=0 hit, solid=false treats
+    // the shape as HOLLOW and reports the exit wall (e.g. a ray from inside
+    // a capsule hits its own wall at ~radius). Neither ignores the collider
+    // containing the origin, so rays that start inside their own body (the
+    // player's ground check, mob steering/LOS rays) must exclude that body
+    // explicitly via filterExcludeRigidBody - passing it here keeps callers
+    // from ghost-blocking on themselves.
+    const excludeBody = excludeBodyId !== undefined
+      ? this.bodies.get(excludeBodyId)?.body
+      : undefined;
+    return this.world.castRay(new Rapier.Ray(from, dir), dist, false, undefined, filterGroups, undefined, excludeBody);
   }
 
   /**
    * Like raycast(), but also returns the surface normal at the hit point:
    * { toi, nx, ny, nz } or null. The ground check needs the normal to tell
    * walkable slopes from wall faces (Rapier 0.12's plain castRay hit carries
-   * no normal, so this goes through castRayAndGetNormal).
+   * no normal, so this goes through castRayAndGetNormal). See raycast() for
+   * the solid/exclude semantics - same rules apply here.
    */
-  raycastWithNormal(from, to, filterGroups = undefined) {
+  raycastWithNormal(from, to, filterGroups = undefined, excludeBodyId = undefined) {
     if (!this.world) return null;
 
     const dx = to.x - from.x;
@@ -95,7 +103,10 @@ export class PhysicsWorld {
     if (dist <= 0) return null;
 
     const dir = { x: dx / dist, y: dy / dist, z: dz / dist };
-    const hit = this.world.castRayAndGetNormal(new Rapier.Ray(from, dir), dist, false, undefined, filterGroups);
+    const excludeBody = excludeBodyId !== undefined
+      ? this.bodies.get(excludeBodyId)?.body
+      : undefined;
+    const hit = this.world.castRayAndGetNormal(new Rapier.Ray(from, dir), dist, false, undefined, filterGroups, undefined, excludeBody);
     if (!hit) return null;
     return { toi: hit.toi, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z };
   }

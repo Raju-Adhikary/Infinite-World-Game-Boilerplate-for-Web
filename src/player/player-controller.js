@@ -268,7 +268,12 @@ export class PlayerController {
     this._leapCooldown = Math.max(0, this._leapCooldown - dt);
     const rayFrom = { x: p.x, y: p.y + 0.1, z: p.z };
     const rayTo = { x: p.x, y: p.y - 0.9, z: p.z };
-    const hit = this.physics.raycastWithNormal(rayFrom, rayTo);
+    // Exclude the player's own capsule: the ray starts INSIDE it (bottom wall
+    // sits at p.y), and Rapier's solid=false treats shapes as hollow - without
+    // the exclusion the ray pierced the capsule's own bottom wall at 0.1m and
+    // reported a downward normal, which made grounded permanently false
+    // (no jumping, no ground snap) while the body still collided with terrain.
+    const hit = this.physics.raycastWithNormal(rayFrom, rayTo, undefined, this.bodyId);
     // Rapier 0.12 exposes the hit distance as `toi` (newer builds renamed it
     // to `timeOfImpact`).
     const hitDist = hit ? hit.toi : null;
