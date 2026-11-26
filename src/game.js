@@ -163,6 +163,11 @@ export class Game {
     ui.hideLoading();
     ui.showStart();
 
+    // Console/QA handle: lets tests and power users inspect the live game
+    // (positions, entities, biome queries) without touching the internals,
+    // e.g. window.game.biome.get(x, z) or window.game.player.getPos()
+    if (typeof window !== 'undefined') window.game = this;
+
     // Render idle scene
     this._renderIdle();
   }
